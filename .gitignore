@@ -1,0 +1,40 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.tmp
+*.log
+
+.vscode/
+.idea/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+dist/
+build/
+.next/
+out/
+coverage/
+.turbo/
+.parcel-cache/
+
+# Rust
+target/
+Cargo.lock
+
+# Env / secrets
+.env
+.env.*
+
+# Misc
+GUIDE
+.wrangler/
+**/.wrangler/

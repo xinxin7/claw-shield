@@ -1,0 +1,11 @@
+name = "claw-shield-relay"
+main = "index.js"
+compatibility_date = "2026-02-24"
+compatibility_flags = ["global_fetch_strictly_public"]
+workers_dev = true
+
+[vars]
+TARGET = "https://claw-shield-gateway.ohttp.workers.dev/"
+
+# Required secret for gateway allowlist.
+# wrangler secret put RELAY_SHARED_TOKEN

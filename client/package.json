@@ -1,0 +1,16 @@
+{
+  "name": "claw-shield",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenClaw OHTTP shield plugin for privacy-preserving provider routing.",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "bhttp-js": "^0.3.6",
+    "ohttp-js": "^0.1.5"
+  }
+}

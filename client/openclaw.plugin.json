@@ -1,0 +1,51 @@
+{
+  "id": "claw-shield",
+  "name": "Claw Shield",
+  "description": "Intercept provider requests and forward them through OHTTP relay + gateway.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "routePath": {
+        "type": "string",
+        "default": "/api/plugins/ohttp/:provider/*"
+      },
+      "gatewayKeysUrl": {
+        "type": "string",
+        "default": "https://claw-shield-gateway.ohttp.workers.dev/.well-known/ohttp-keys"
+      },
+      "gatewayUrl": {
+        "type": "string",
+        "default": "https://claw-shield-gateway.ohttp.workers.dev/"
+      },
+      "relayUrl": {
+        "type": "string",
+        "default": "https://claw-shield-relay.ohttp.workers.dev"
+      },
+      "keyCacheTtlMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "default": 300000
+      },
+      "allowUserSuppliedCredentials": {
+        "type": "boolean",
+        "default": false
+      },
+      "providerTargets": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "default": {
+          "openai": "https://api.openai.com",
+          "google": "https://generativelanguage.googleapis.com",
+          "anthropic": "https://api.anthropic.com",
+          "openrouter": "https://openrouter.ai",
+          "mistral": "https://api.mistral.ai",
+          "groq": "https://api.groq.com"
+        }
+      }
+    }
+  }
+}

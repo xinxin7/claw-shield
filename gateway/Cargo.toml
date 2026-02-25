@@ -1,0 +1,23 @@
+[package]
+name = "claw-shield"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+base64 = "0.22"
+bhttp = { version = "0.7.2", default-features = false }
+getrandom = { version = "0.2.17", features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3.4", features = ["wasm_js"] }
+js-sys = "0.3"
+ohttp = { version = "0.7.2", default-features = false, features = ["server", "rust-hpke"] }
+tokio = { version = "1", features = ["sync"] }
+wasm-bindgen = "0.2"
+worker = "0.7.4"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
