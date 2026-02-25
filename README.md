@@ -12,10 +12,16 @@ Claw Shield routes model requests through an OHTTP `Relay -> Gateway` path, redu
 
 ## Quick Start
 
-### Install (one line, WSL/Linux)
+### Install (WSL/Linux)
 
 ```bash
 bash -lc 'set -euo pipefail; EXT="$HOME/.openclaw/extensions/claw-shield"; rm -rf "$EXT"; mkdir -p "$HOME/.openclaw/extensions"; tmp="$(mktemp -d)"; git clone --depth 1 "https://github.com/xinxin7/claw-shield.git" "$tmp/claw-shield"; cp -r "$tmp/claw-shield/client" "$EXT"; systemctl --user restart openclaw-gateway.service; sleep 2; curl -sS "http://127.0.0.1:18789/api/plugins/claw-shield/status"'
+```
+
+### Install (macOS)
+
+```bash
+bash -lc 'set -euo pipefail; EXT="$HOME/.openclaw/extensions/claw-shield"; rm -rf "$EXT"; mkdir -p "$HOME/.openclaw/extensions"; tmp="$(mktemp -d)"; git clone --depth 1 "https://github.com/xinxin7/claw-shield.git" "$tmp/claw-shield"; cp -r "$tmp/claw-shield/client" "$EXT"; (command -v openclaw >/dev/null && openclaw gateway restart) || true; sleep 2; curl -sS "http://127.0.0.1:18789/api/plugins/claw-shield/status"'
 ```
 
 ### Verify protection
