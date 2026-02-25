@@ -1,14 +1,31 @@
 # Claw Shield
 
-Protect your OpenClaw traffic.
+🛡️ Protect your OpenClaw traffic.
 
 Claw Shield routes model requests through an OHTTP `Relay -> Gateway` path, reducing provider-side fingerprinting while preserving the OpenClaw workflow you already use.
 
-## Why Use Claw Shield
+## Why Use Claw Shield ✨
 
 - **Harder to profile**: providers see relayed traffic, not a direct OpenClaw fingerprint tied to your behavior.
 - **Lower distillation-pressure exposure**: OHTTP + fingerprint reduction addresses risk patterns discussed in [Anthropic's distillation report](https://www.anthropic.com/news/detecting-and-preventing-distillation-attacks).
 - **Less OpenClaw-targeted throttling**: lower chance of being labeled as obvious OpenClaw traffic and rate-limited aggressively like this [community report](https://www.reddit.com/r/AI_Agents/comments/1r70lq9/openclaw_broke_down_after_just_4_messages/).
+
+## Providers 🚀
+
+### ✅ Verified
+
+- `google` (Gemini)
+- `openai`
+
+### 🧩 Supported
+
+- `anthropic`
+- `openrouter`
+- `mistral`
+- `groq`
+
+> `Verified` means end-to-end tested in this repo's current release workflow.  
+> `Supported` means implemented via `providerTargets` and compatible routing/auth logic.
 
 ## Quick Start
 
