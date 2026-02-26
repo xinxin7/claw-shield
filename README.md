@@ -2,6 +2,8 @@
 
 🛡️ Protect your OpenClaw traffic.
 
+![Claw Shield Architecture](https://lh3.googleusercontent.com/gg-dl/AOI_d_9FmmROMe95IJOuBb9LuGZNprtpsGLMkP4STY6kucMi8yl_lZHspUarUnP8GGYPZ8zAGr1GYMIYnWVkF3J2QCpQCDd719Xg_bpNTvejcnKutic27AFGRigt7UD5XUmWaFQWrqDc9YwCjYcWhPxfeMy3SrorlvBk5iV_MNNoyIyTwBjOmA=s1024-rj)
+
 Claw Shield routes model requests through an OHTTP `Relay -> Gateway` path, reducing provider-side fingerprinting while preserving the OpenClaw workflow you already use.
 
 ## Why Use Claw Shield ✨
@@ -57,3 +59,4 @@ bash -lc 'set -euo pipefail; EXT="$HOME/.openclaw/extensions/claw-shield"; rm -r
 - `client/` OpenClaw plugin (interception + OHTTP client behavior)
 - `relay/` Cloudflare Worker relay
 - `gateway/` Cloudflare Worker gateway
+
