@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="./architecture.png" width="700" alt="Claw Shield Architecture" />
-</p>
-
 <h1 align="center">Claw Shield</h1>
 
 <p align="center">
@@ -14,6 +10,10 @@
   <a href="#live-trace-dashboard">Dashboard</a> ·
   <a href="#how-it-works">Architecture</a> ·
   <a href="#roadmap">Roadmap</a>
+</p>
+
+<p align="center">
+  <img src="./architecture.png" width="700" alt="Claw Shield Architecture" />
 </p>
 
 ---
