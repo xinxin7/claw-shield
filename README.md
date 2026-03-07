@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./architecture.png" width="800" alt="Claw Shield Architecture" />
+  <img src="./architecture.png" width="700" alt="Claw Shield Architecture" />
 </p>
 
 <h1 align="center">Claw Shield</h1>
@@ -80,14 +80,33 @@ CoT steps that trigger a tool call are visually aligned with their corresponding
 
 ## How It Works
 
-```
-┌──────────┐     ┌──────────┐     ┌──────────────────┐     ┌──────────┐
-│  Agent   │──── │  Relay   │──── │     Gateway      │──── │ Provider │
-│ (Client) │     │          │     │ ┌──────────────┐ │     │ (OpenAI, │
-│          │ ────│          │──── │ │  Telemetry   │ │──── │  Gemini, │
-│          │     │          │     │ │  + Dashboard │ │     │  etc.)   │
-└──────────┘     └──────────┘     │ └──────────────┘ │     └──────────┘
-                                  └──────────────────┘
+```mermaid
+flowchart LR
+    subgraph Local["Local Environment"]
+        Agent["Agent Client<br/>(OpenClaw)"]
+    end
+
+    subgraph Shield["Claw Shield Infrastructure"]
+        direction TB
+        Relay["Relay<br/>(Sees who, not what)"]
+        
+        subgraph GW["Gateway (Sees what, not who)"]
+            GatewayNode["Routing & Decryption"]
+            KV[("Telemetry KV")]
+            Dashboard["Live Trace Dashboard"]
+        end
+    end
+
+    subgraph API["External Providers"]
+        Provider["Model Provider<br/>(OpenAI, Gemini, etc.)"]
+    end
+
+    Agent == "1. OHTTP Encrypted<br/>(+ project_id)" ==> Relay
+    Relay == "2. Forwards Payload" ==> GatewayNode
+    GatewayNode == "3. Decrypted API Call" ==> Provider
+    Provider -. "4. API Response<br/>(SSE / JSON)" .-> GatewayNode
+    GatewayNode -. "5. Extracts CoT<br/>& Tools" .-> KV
+    KV -. "6. Serves Traces" .-> Dashboard
 ```
 
 1. **Client plugin** intercepts outbound model requests, wraps them in OHTTP, and injects a `project_id` + `session_id`.
