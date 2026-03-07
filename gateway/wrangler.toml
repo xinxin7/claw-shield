@@ -12,6 +12,13 @@ OHTTP_KEY_ID = "1"
 [env.dev.vars]
 OHTTP_KEY_ID = "1"
 
+# Telemetry KV namespace for agent governance traces.
+# Create with: wrangler kv:namespace create TELEMETRY
+# Then paste the id below.
+[[kv_namespaces]]
+binding = "TELEMETRY"
+id = "c22c8418a3c44b05b8dadf60f9b98a3d"
+
 # In production, inject secrets with wrangler secret.
 # wrangler secret put OHTTP_PRIVATE_KEY_SEED_B64
 # wrangler secret put RELAY_SHARED_TOKEN

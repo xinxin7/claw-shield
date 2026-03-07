@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claw Shield - Agent Governance</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+:root {
+  --bg: #1b1e2b; --bg2: #232739; --bg3: #2c3049;
+  --bg-elevated: #282c42; --bg-surface: #1f2335;
+  --border: rgba(148,163,196,.12); --border-subtle: rgba(148,163,196,.07);
+  --border-glow: rgba(99,179,237,.35); --border-accent: rgba(99,179,237,.22);
+  --accent: #63b3ed; --accent2: #a78bfa; --accent3: #68d391;
+  --warn: #f6ad55; --danger: #fc8181;
+  --text: #e8ecf4; --text2: #a0aec0; --text3: #5a6478;
+  --radius: 10px; --radius-sm: 6px;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.25), 0 1px 2px rgba(0,0,0,.15);
+  --shadow-md: 0 4px 12px rgba(0,0,0,.3), 0 2px 4px rgba(0,0,0,.2);
+  --mono: 'JetBrains Mono',monospace;
+  --sans: 'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden;font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+
+/* Header */
+header{display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:56px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0;user-select:none;box-shadow:var(--shadow-sm)}
+.h-left{display:flex;align-items:center;gap:10px}
+.h-logo{width:30px;height:30px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;box-shadow:0 2px 8px rgba(99,179,237,.25)}
+.h-title{font-size:16px;font-weight:700;letter-spacing:-.01em;color:var(--text)}
+.h-sub{font-size:12px;color:var(--text3);margin-left:2px;font-weight:500}
+.live{display:flex;align-items:center;gap:6px;background:rgba(104,211,145,.08);border:1px solid rgba(104,211,145,.2);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--accent3);font-weight:600}
+.live-dot{width:6px;height:6px;background:var(--accent3);border-radius:50%;animation:pulse 1.8s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.75)}}
+
+/* Stat Bar */
+.stats{display:flex;gap:1px;background:var(--border);border-bottom:1px solid var(--border);flex-shrink:0}
+.stat{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 10px;background:var(--bg2);gap:3px}
+.sv{font-size:22px;font-weight:700;font-family:var(--mono);color:var(--accent);letter-spacing:-.02em}
+.sv.w{color:var(--warn)}.sv.d{color:var(--danger)}.sv.g{color:var(--accent3)}
+.sl{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;font-weight:500}
+
+/* Main */
+.main{display:flex;flex:1;overflow:hidden}
+
+/* Sidebar */
+.sidebar{width:270px;flex-shrink:0;background:var(--bg-surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.sb-hdr{padding:12px 16px;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);border-bottom:1px solid var(--border);flex-shrink:0;font-weight:600}
+.rlist{overflow-y:auto;flex:1}
+.rlist::-webkit-scrollbar{width:4px}.rlist::-webkit-scrollbar-thumb{background:rgba(99,179,237,.2);border-radius:2px}
+.sess{border-bottom:1px solid var(--border-subtle)}
+.sess-hdr{display:flex;flex-direction:column;gap:4px;padding:12px 16px;cursor:pointer;transition:background .15s}
+.sess-hdr:hover{background:var(--bg-elevated)}
+.sess.active>.sess-hdr{background:rgba(99,179,237,.07);border-left:3px solid var(--accent);padding-left:13px}
+.sess-top{display:flex;align-items:center;justify-content:space-between}
+.sess-title{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--accent);display:flex;align-items:center;gap:6px}
+.sess-count{font-size:10px;background:rgba(99,179,237,.12);padding:2px 7px;border-radius:10px;color:var(--accent);font-weight:700}
+.sess-dots{display:flex;gap:3px}
+.ri-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.ri-dot.ok{background:var(--accent3)}.ri-dot.error{background:var(--danger)}.ri-dot.pending{background:var(--warn);animation:pulse 1s infinite}
+.sess-row2{font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px}
+.pbadge{font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(167,139,250,.15);color:var(--accent2);font-weight:600}
+.sess-meta{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--text3)}
+.sess-flags{display:flex;gap:4px;font-size:13px}
+.sess-traces{padding:2px 0 4px 18px;display:none}
+.sess.active .sess-traces{display:block}
+.st-item{padding:5px 12px;font-size:11px;color:var(--text3);border-left:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.st-item .ri-dot{width:5px;height:5px}
+.empty{padding:28px;text-align:center;color:var(--text3);font-size:13px;line-height:1.6}
+
+/* Detail / Waterfall */
+.detail{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+.no-sel{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:var(--text3)}
+.no-sel .big{font-size:44px;opacity:.6}.no-sel p{font-size:14px}
+.d-hdr{padding:14px 20px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.d-id{font-family:var(--mono);font-size:14px;font-weight:700;color:var(--accent)}
+.d-meta{font-size:13px;color:var(--text2);display:flex;gap:18px}
+
+/* Waterfall – single scrollable area with row-based layout */
+.waterfall{flex:1;overflow-y:auto;overflow-x:hidden;padding:0}
+.waterfall::-webkit-scrollbar{width:5px}.waterfall::-webkit-scrollbar-thumb{background:rgba(99,179,237,.15);border-radius:3px}
+.wf-hdr{display:grid;grid-template-columns:1fr 200px 1fr;position:sticky;top:0;z-index:2;background:var(--bg2)}
+.wf-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);padding:10px 16px 8px;border-bottom:1px solid var(--border);font-weight:600}
+.wf-row{display:grid;grid-template-columns:1fr 200px 1fr;border-bottom:1px solid var(--border-subtle);transition:background .12s}
+.wf-row:hover{background:rgba(99,179,237,.02)}
+.wf-cell{padding:14px 16px}
+.wf-cell-mid{padding:14px 10px;border-left:1px solid var(--border-subtle);border-right:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:center}
+.wf-cell-right{padding:14px 16px}
+
+/* CoT card (left) */
+.cot-card{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;cursor:pointer;transition:all .18s ease}
+.cot-card:hover{border-color:var(--border-glow);box-shadow:0 0 0 1px rgba(99,179,237,.08)}
+.cot-card.open{border-color:var(--border-accent);background:rgba(99,179,237,.04)}
+.cot-num{display:inline-flex;width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,rgba(99,179,237,.15),rgba(167,139,250,.15));border:1px solid var(--border-glow);align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--accent);font-family:var(--mono);margin-right:8px;flex-shrink:0;vertical-align:middle}
+.cot-preview{font-size:13px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline;line-height:1.5}
+.cot-full{display:none;font-size:13px;line-height:1.8;color:var(--text);margin-top:8px;white-space:pre-wrap;font-family:var(--mono)}
+.cot-card.open .cot-full{display:block}.cot-card.open .cot-preview{display:none}
+
+/* Decision node (middle) */
+.dec-node{display:flex;flex-direction:column;gap:3px;align-items:center}
+.dec-line{width:2px;background:linear-gradient(180deg,var(--accent),var(--accent2));margin:0 auto;height:18px;flex-shrink:0;border-radius:1px}
+.dec-chip{display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:var(--radius);background:var(--bg-elevated);border:1px solid var(--border-accent);font-family:var(--mono);font-size:12px;color:var(--accent2);font-weight:600;box-shadow:var(--shadow-sm);transition:border-color .15s}
+.dec-chip:hover{border-color:var(--accent2)}
+.dec-chip.sensitive{border-color:rgba(246,173,85,.35);color:var(--warn)}
+.dec-arrow{font-size:12px;color:var(--accent)}
+.dec-sens{font-size:10px;color:var(--danger);font-weight:700;margin-top:2px}
+
+/* Output card (right) */
+.out-card{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow-sm)}
+.out-hdr{padding:8px 14px;background:var(--bg3);font-size:12px;color:var(--text2);font-weight:600;display:flex;align-items:center;gap:8px}
+.out-body{padding:10px 14px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--text2);white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto}
+.out-body::-webkit-scrollbar{width:3px}.out-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.flow-meta{font-size:11px;color:var(--text3);margin-bottom:8px;font-weight:500}
+
+/* Perf bar */
+.perf{padding:12px 20px;background:var(--bg2);border-top:1px solid var(--border);flex-shrink:0;display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+.perf-item{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)}
+.perf-val{font-family:var(--mono);font-weight:700;color:var(--accent)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="h-left">
+    <div class="h-logo">S</div>
+    <span class="h-title">Claw Shield</span>
+    <span class="h-sub">Agent Governance</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span id="last-refreshed" style="font-size:11px;color:var(--text3)"></span>
+    <button id="refresh-btn" onclick="manualRefresh()" title="Refresh now" style="background:rgba(99,179,237,.08);border:1px solid var(--border-accent);color:var(--accent);border-radius:var(--radius-sm);padding:5px 14px;font-size:13px;cursor:pointer;transition:all .15s;font-family:var(--sans);font-weight:500" onmouseover="this.style.background='rgba(99,179,237,.14)'" onmouseout="this.style.background='rgba(99,179,237,.08)'">&#x21bb; Refresh</button>
+    <div class="live"><div class="live-dot"></div>MANUAL</div>
+  </div>
+</header>
+
+<div class="stats" id="stats">
+  <div class="stat"><div class="sv g" id="s-total">0</div><div class="sl">Requests</div></div>
+  <div class="stat"><div class="sv" id="s-ok">0</div><div class="sl">Success</div></div>
+  <div class="stat"><div class="sv d" id="s-err">0</div><div class="sl">Errors</div></div>
+  <div class="stat"><div class="sv" id="s-tools">0</div><div class="sl">Tool Calls</div></div>
+  <div class="stat"><div class="sv w" id="s-sens">0</div><div class="sl">Sensitive</div></div>
+  <div class="stat"><div class="sv" id="s-cot">0</div><div class="sl">CoT Steps</div></div>
+  <div class="stat"><div class="sv" id="s-gw">--</div><div class="sl">Avg Gateway ms</div></div>
+</div>
+
+<div class="main">
+  <div class="sidebar">
+    <div class="sb-hdr">Sessions</div>
+    <div class="rlist" id="rlist"><div class="empty">No requests yet.<br>Waiting for agent activity...</div></div>
+  </div>
+  <div class="detail" id="detail">
+    <div class="no-sel" id="no-sel">
+      <div class="big">S</div>
+      <p>Select a session to inspect the full agent turn</p>
+      <p style="font-size:12px;color:var(--text3)">Each session groups all requests from one user prompt</p>
+    </div>
+    <div id="d-content" style="display:none;flex:1;display:none;flex-direction:column;overflow:hidden">
+      <div class="d-hdr">
+        <div><div class="d-id" id="d-id">--</div><div style="font-size:12px;color:var(--text2);margin-top:2px" id="d-path">--</div></div>
+        <div class="d-meta" id="d-meta"></div>
+      </div>
+      <div class="waterfall" id="waterfall"></div>
+      <div class="perf" id="perf"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let records=[], sessions=[], selectedSessId=null, projectId='';
+let lastRecordsJson='', lastSelectedJson='';
+
+function init(){
+  const params=new URLSearchParams(location.search);
+  projectId=params.get('project')||'';
+  if(!projectId){document.getElementById('no-sel').innerHTML='<div class="big">?</div><p>Missing project ID. Add ?project=YOUR_ID to the URL.</p>';return}
+  poll();
+}
+
+async function poll(){
+  setRefreshState(true);
+  try{
+    const [rRes,sRes]=await Promise.all([
+      fetch('/api/traces?project='+encodeURIComponent(projectId)),
+      fetch('/api/summary?project='+encodeURIComponent(projectId))
+    ]);
+    if(rRes.ok){
+      const fresh=await rRes.json();
+      const freshJson=JSON.stringify(fresh);
+      if(freshJson!==lastRecordsJson){
+        records=fresh;
+        lastRecordsJson=freshJson;
+        sessions=buildSessions(records);
+        renderSidebar();
+      }
+    }
+    if(sRes.ok){const s=await sRes.json();updateStats(s)}
+    if(selectedSessId){
+      const selTraces=sessions.find(s=>s.id===selectedSessId);
+      const selJson=JSON.stringify(selTraces);
+      if(selJson!==lastSelectedJson){
+        lastSelectedJson=selJson;
+        renderDetail(selectedSessId);
+      }
+    }
+    updateLastRefreshed();
+  }catch(e){console.warn('poll error',e)}
+  finally{setRefreshState(false)}
+}
+
+function manualRefresh(){poll()}
+function setRefreshState(l){const b=document.getElementById('refresh-btn');if(b)b.style.opacity=l?'0.45':'1'}
+function updateLastRefreshed(){const e=document.getElementById('last-refreshed');if(e)e.textContent='Updated '+new Date().toLocaleTimeString()}
+function esc(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'):''}
+function fmtMs(ms){if(ms==null||ms===0)return'--';return ms<1000?ms+' ms':(ms/1000).toFixed(2)+' s'}
+
+// ── Session grouping ────────────────────────────────────────────────
+function buildSessions(recs){
+  const map=new Map();
+  for(const r of recs){
+    const sid=r.session_id||r.id;
+    if(!map.has(sid))map.set(sid,{id:sid,traces:[]});
+    map.get(sid).traces.push(r);
+  }
+  const arr=[...map.values()];
+  // Sort traces inside each session chronologically
+  arr.forEach(s=>s.traces.sort((a,b)=>a.timestamp_ms-b.timestamp_ms));
+  // Sort sessions by earliest trace, newest first
+  arr.sort((a,b)=>b.traces[0].timestamp_ms-a.traces[0].timestamp_ms);
+  return arr;
+}
+
+function mergeSession(sess){
+  const traces=sess.traces;
+  let steps=[],tools=[],results=[];
+  let stepOff=0;
+  for(const r of traces){
+    const rs=(r.cot_steps||[]).map(s=>({...s,index:s.index+stepOff,_turn:traces.indexOf(r)+1}));
+    steps=steps.concat(rs);
+    stepOff+=rs.length;
+    tools=tools.concat((r.tool_calls||[]).map(t=>({...t,_turn:traces.indexOf(r)+1})));
+    results=results.concat(r.tool_results||[]);
+  }
+  const totalGw=traces.reduce((s,r)=>s+(r.timing?.gateway_ms||0),0);
+  const totalUp=traces.reduce((s,r)=>s+(r.timing?.upstream_ms||0),0);
+  const hasErr=traces.some(r=>r.status==='error');
+  const providers=[...new Set(traces.map(r=>r.provider).filter(Boolean))];
+  const models=[...new Set(traces.map(r=>r.model).filter(Boolean))];
+  return{steps,tools,results,totalGw,totalUp,hasErr,providers,models,count:traces.length};
+}
+
+// ── Stats ───────────────────────────────────────────────────────────
+function updateStats(s){
+  document.getElementById('s-total').textContent=s.total_requests||0;
+  document.getElementById('s-ok').textContent=s.success_requests||0;
+  document.getElementById('s-err').textContent=s.error_requests||0;
+  document.getElementById('s-tools').textContent=s.total_tool_calls||0;
+  document.getElementById('s-sens').textContent=s.sensitive_tool_calls||0;
+  document.getElementById('s-cot').textContent=s.total_cot_steps||0;
+  document.getElementById('s-gw').textContent=s.avg_gateway_ms?s.avg_gateway_ms+' ms':'--';
+}
+
+// ── Sidebar ─────────────────────────────────────────────────────────
+function renderSidebar(){
+  const el=document.getElementById('rlist');
+  if(!sessions.length){el.innerHTML='<div class="empty">No requests yet.<br>Waiting for agent activity...</div>';return}
+  el.innerHTML=sessions.map(sess=>{
+    const m=mergeSession(sess);
+    const hasSens=m.tools.some(t=>t.is_sensitive);
+    const hasCot=m.steps.length>0;
+    const hasTools=m.tools.length>0;
+    const isActive=sess.id===selectedSessId;
+    const first=sess.traces[0];
+    const ts=new Date(first.timestamp_ms).toLocaleTimeString();
+    return`<div class="sess ${isActive?'active':''}" id="sess-${esc(sess.id)}">
+      <div class="sess-hdr" onclick="sel('${esc(sess.id)}')">
+        <div class="sess-top">
+          <span class="sess-title"><span class="sess-count">${m.count}</span> ${ts}</span>
+          <span class="sess-dots">${sess.traces.map(r=>'<span class="ri-dot '+r.status+'"></span>').join('')}</span>
+        </div>
+        <div class="sess-row2"><span class="pbadge">${esc(m.providers.join('+').toUpperCase()||'--')}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px">${esc(m.models.join(', ')||'--')}</span></div>
+        <div class="sess-meta"><span>${fmtMs(m.totalGw)}</span><span class="sess-flags">${hasCot?'<span title="CoT">&#x1f9e0;</span>':''}${hasTools?'<span title="Tools">&#x26a1;</span>':''}${hasSens?'<span title="Sensitive">&#x26a0;&#xfe0f;</span>':''}${m.hasErr?'<span title="Error">&#x274c;</span>':''}</span></div>
+      </div>
+      <div class="sess-traces">${sess.traces.map((r,i)=>`<div class="st-item"><span class="ri-dot ${r.status}"></span>Turn ${i+1}: ${esc(r.path.split('?')[0].split('/').slice(-1)[0]||r.path)} ${fmtMs(r.timing?.gateway_ms)}</div>`).join('')}</div>
+    </div>`}).join('');
+}
+
+function sel(id){
+  selectedSessId=id;
+  renderSidebar();
+  const sess=sessions.find(s=>s.id===id);
+  lastSelectedJson=JSON.stringify(sess);
+  renderDetail(id);
+}
+
+// ── Detail ──────────────────────────────────────────────────────────
+function renderDetail(id){
+  const sess=sessions.find(s=>s.id===id);if(!sess)return;
+  document.getElementById('no-sel').style.display='none';
+  const c=document.getElementById('d-content');c.style.display='flex';
+  const m=mergeSession(sess);
+  document.getElementById('d-id').textContent='Session: '+sess.traces.length+' request'+(sess.traces.length>1?'s':'');
+  document.getElementById('d-path').textContent=sess.traces.map(r=>r.path.split('?')[0]).join(' → ');
+  document.getElementById('d-meta').innerHTML=`
+    <span>${esc(m.providers.join(', '))}</span>
+    <span>${esc(m.models.join(', ')||'--')}</span>
+    <span style="color:${m.hasErr?'var(--danger)':'var(--accent3)'}">${m.hasErr?'Has Errors':'All OK'}</span>
+    <span>Total: ${fmtMs(m.totalGw)}</span>`;
+  renderWaterfall(m);
+  renderPerf(m);
+  document.querySelectorAll('.cot-card').forEach(el=>el.addEventListener('click',()=>el.classList.toggle('open')));
+}
+
+function buildFlowGroups(m){
+  const steps=(m.steps||[]);
+  const tools=(m.tools||[]);
+  const results=(m.results||[]);
+  const groups=steps.map(s=>({
+    turn: s._turn,
+    cot: s,
+    decision: null,
+    output: null,
+  }));
+
+  for(let i=0;i<tools.length;i++){
+    const tc=tools[i];
+    let rowIdx=-1;
+    for(let j=0;j<groups.length;j++){
+      if(groups[j].turn===tc._turn && !groups[j].decision){rowIdx=j;break;}
+    }
+    if(rowIdx===-1){
+      for(let j=0;j<groups.length;j++){
+        if(!groups[j].decision){rowIdx=j;break;}
+      }
+    }
+    if(rowIdx===-1){
+      groups.push({
+        turn: tc._turn,
+        cot: null,
+        decision: null,
+        output: null,
+      });
+      rowIdx=groups.length-1;
+    }
+
+    const res=results.find(r=>r.call_id===tc.call_id) || null;
+    groups[rowIdx].decision=tc;
+    groups[rowIdx].output=res;
+  }
+
+  return groups;
+}
+
+// ── Waterfall ───────────────────────────────────────────────────────
+function renderWaterfall(m){
+  const el=document.getElementById('waterfall');
+  const groups=buildFlowGroups(m);
+
+  let html='<div class="wf-hdr"><div class="wf-label">Reasoning (CoT)</div><div class="wf-label" style="text-align:center;border-left:1px solid var(--border);border-right:1px solid var(--border)">Decisions</div><div class="wf-label">Execution Output</div></div>';
+
+  if(!groups.length){
+    html+='<div class="wf-row"><div class="wf-cell empty">No reasoning content detected</div><div class="wf-cell-mid empty">No decisions</div><div class="wf-cell-right empty">No execution output</div></div>';
+  } else {
+    groups.forEach(g=>{
+      const cotText=g.cot?esc(g.cot.content):'';
+
+      // Left: CoT
+      let left=`<div class="cot-card"><div class="flow-meta">Turn ${g.turn}</div>${g.cot?`<span class="cot-preview">${cotText.slice(0,120)}${cotText.length>120?'...':''}</span><div class="cot-full">${cotText}</div>`:''}</div>`;
+
+      // Middle: Decision (vertically centered via wf-cell-mid flexbox)
+      let mid='';
+      if(g.decision){
+        const cls=g.decision.is_sensitive?'sensitive':'';
+        mid=`<div class="dec-node"><div class="dec-chip ${cls}"><span class="dec-arrow">&#x27a4;</span>${esc(g.decision.name)}</div>${g.decision.is_sensitive?'<div class="dec-sens">&#x1f6a8; '+esc(g.decision.sensitive_flags.join(', '))+'</div>':''}</div>`;
+      }
+
+      // Right: Output
+      let right='';
+      if(g.decision){
+        right=`<div class="out-card"><div class="out-hdr"><span>&#x26a1;</span>${esc(g.decision.name)} <span style="color:var(--text3)">${esc(g.decision.call_id)}</span></div><div class="out-body">${esc(fmtArgs(g.decision.raw_args))}</div>${g.output?`<div class="out-hdr" style="border-top:1px solid var(--border)"><span>&#x2705;</span>Result</div><div class="out-body">${esc(g.output.content)}</div>`:'<div class="out-hdr" style="border-top:1px solid var(--border)"><span style="font-size:10px;color:var(--text3)">Awaiting result</span></div>'}</div>`;
+      }
+
+      html+=`<div class="wf-row"><div class="wf-cell">${left}</div><div class="wf-cell-mid">${mid}</div><div class="wf-cell-right">${right}</div></div>`;
+    });
+  }
+
+  el.innerHTML=html;
+}
+
+function renderPerf(m){
+  document.getElementById('perf').innerHTML=`
+    <div class="perf-item">Requests: <span class="perf-val">${m.count}</span></div>
+    <div class="perf-item">Total Gateway: <span class="perf-val">${fmtMs(m.totalGw)}</span></div>
+    <div class="perf-item">Total Upstream: <span class="perf-val">${fmtMs(m.totalUp)}</span></div>
+    <div class="perf-item">CoT Steps: <span class="perf-val">${m.steps.length}</span></div>
+    <div class="perf-item">Tool Calls: <span class="perf-val">${m.tools.length}</span></div>
+    <div class="perf-item">Sensitive: <span class="perf-val" style="color:${m.tools.some(t=>t.is_sensitive)?'var(--danger)':'var(--accent3)'}">${m.tools.filter(t=>t.is_sensitive).length}</span></div>`;
+}
+
+function fmtArgs(raw){try{return JSON.stringify(JSON.parse(raw),null,2)}catch(e){return raw}}
+
+init();
+</script>
+</body>
+</html>

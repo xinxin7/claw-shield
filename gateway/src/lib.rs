@@ -1,3 +1,5 @@
+mod telemetry;
+
 use std::io::Cursor;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -11,11 +13,20 @@ use ohttp::{
 use tokio::sync::OnceCell;
 use worker::*;
 
+use crate::telemetry::{
+    TraceRecord, Timing,
+    parse_response_telemetry, parse_request_telemetry,
+    infer_provider_from_url, store_trace, list_traces, compute_summary,
+};
+
 const OHTTP_REQ_CONTENT_TYPE: &str = "message/ohttp-req";
 const OHTTP_RES_CONTENT_TYPE: &str = "message/ohttp-res";
 const OHTTP_KEYS_CONTENT_TYPE: &str = "application/ohttp-keys";
 const DEFAULT_UPSTREAM_BASE_URL: &str = "https://api.openai.com";
 const RELAY_ALLOWLIST_HEADER: &str = "x-claw-shield-relay-token";
+const PROJECT_ID_HEADER: &str = "x-claw-shield-project-id";
+const SESSION_ID_HEADER: &str = "x-claw-shield-session-id";
+const DASHBOARD_HTML: &str = include_str!("dashboard.html");
 
 static GATEWAY_STATE: OnceCell<GatewayState> = OnceCell::const_new();
 
@@ -40,6 +51,15 @@ struct ParsedBhttpRequest {
     authorization: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    project_id: Option<String>,
+    session_id: Option<String>,
+}
+
+struct UpstreamResult {
+    bhttp_encoded: Vec<u8>,
+    raw_body: Vec<u8>,
+    content_type: String,
+    status_code: u16,
 }
 
 impl GatewayState {
@@ -80,14 +100,24 @@ impl GatewayState {
 }
 
 #[event(fetch)]
-pub async fn fetch(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
+pub async fn fetch(mut req: Request, env: Env, ctx: Context) -> Result<Response> {
     let path = req.path();
+
+    if req.method() == Method::Options {
+        return cors_preflight();
+    }
+
     match (req.method(), path.as_str()) {
         (Method::Get, "/.well-known/ohttp-keys") => handle_well_known_ohttp_keys(&env).await,
         (Method::Get, "/ohttp-configs") => handle_ohttp_configs(&env).await,
         (Method::Post, "/") | (Method::Post, "/gateway") | (Method::Post, "/ohttp") => {
-            handle_ohttp_gateway(&mut req, &env).await
+            handle_ohttp_gateway(&mut req, &env, &ctx).await
         }
+        (Method::Get, p) if p == "/dashboard" || p.starts_with("/dashboard/") => {
+            handle_dashboard()
+        }
+        (Method::Get, "/api/traces") => handle_api_traces(&req, &env).await,
+        (Method::Get, "/api/summary") => handle_api_summary(&req, &env).await,
         _ => Response::error("Not Found", 404),
     }
 }
@@ -118,7 +148,73 @@ async fn handle_well_known_ohttp_keys(env: &Env) -> Result<Response> {
     Ok(response)
 }
 
-async fn handle_ohttp_gateway(req: &mut Request, env: &Env) -> Result<Response> {
+fn cors_preflight() -> Result<Response> {
+    let mut resp = Response::empty()?;
+    resp.headers_mut().set("access-control-allow-origin", "*")?;
+    resp.headers_mut().set("access-control-allow-methods", "GET, POST, OPTIONS")?;
+    resp.headers_mut().set("access-control-allow-headers", "content-type")?;
+    resp.headers_mut().set("access-control-max-age", "86400")?;
+    Ok(resp)
+}
+
+fn with_cors(mut resp: Response) -> Result<Response> {
+    resp.headers_mut().set("access-control-allow-origin", "*")?;
+    Ok(resp)
+}
+
+fn handle_dashboard() -> Result<Response> {
+    let mut resp = Response::from_html(DASHBOARD_HTML)?;
+    resp.headers_mut().set("cache-control", "no-store")?;
+    Ok(resp)
+}
+
+async fn handle_api_traces(req: &Request, env: &Env) -> Result<Response> {
+    let project = extract_query_param(req, "project");
+    let project = match project {
+        Some(p) if !p.is_empty() => p,
+        _ => return with_cors(Response::error("Missing ?project= parameter", 400)?),
+    };
+
+    let kv = env.kv("TELEMETRY")
+        .map_err(|e| Error::RustError(format!("KV binding TELEMETRY not found: {e}")))?;
+    let traces = list_traces(&kv, &project).await?;
+    let json = serde_json::to_string(&traces)
+        .map_err(|e| Error::RustError(format!("json serialize: {e}")))?;
+
+    let mut resp = Response::ok(json)?;
+    resp.headers_mut().set("content-type", "application/json; charset=utf-8")?;
+    resp.headers_mut().set("cache-control", "no-store")?;
+    with_cors(resp)
+}
+
+async fn handle_api_summary(req: &Request, env: &Env) -> Result<Response> {
+    let project = extract_query_param(req, "project");
+    let project = match project {
+        Some(p) if !p.is_empty() => p,
+        _ => return with_cors(Response::error("Missing ?project= parameter", 400)?),
+    };
+
+    let kv = env.kv("TELEMETRY")
+        .map_err(|e| Error::RustError(format!("KV binding TELEMETRY not found: {e}")))?;
+    let traces = list_traces(&kv, &project).await?;
+    let summary = compute_summary(&traces);
+    let json = serde_json::to_string(&summary)
+        .map_err(|e| Error::RustError(format!("json serialize: {e}")))?;
+
+    let mut resp = Response::ok(json)?;
+    resp.headers_mut().set("content-type", "application/json; charset=utf-8")?;
+    resp.headers_mut().set("cache-control", "no-store")?;
+    with_cors(resp)
+}
+
+fn extract_query_param(req: &Request, name: &str) -> Option<String> {
+    let url = req.url().ok()?;
+    url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.to_string())
+}
+
+async fn handle_ohttp_gateway(req: &mut Request, env: &Env, ctx: &Context) -> Result<Response> {
+    let gateway_start = js_sys::Date::now() as u64;
+
     let expected_relay_token = read_secret_or_var(env, "RELAY_SHARED_TOKEN")
         .ok()
         .map(|value| value.trim().to_string())
@@ -182,7 +278,7 @@ async fn handle_ohttp_gateway(req: &mut Request, env: &Env) -> Result<Response> 
     let redacted_path = redact_sensitive_query_params(&parsed_request.path);
     let redacted_target_url = redact_sensitive_query_params(&parsed_request.target_url);
     console_log!(
-        "bhttp parsed method={} path={} target={} content_type={} auth={}",
+        "bhttp parsed method={} path={} target={} content_type={} auth={} project_id={}",
         parsed_request.method.as_ref(),
         redacted_path,
         redacted_target_url,
@@ -190,13 +286,87 @@ async fn handle_ohttp_gateway(req: &mut Request, env: &Env) -> Result<Response> 
             .content_type
             .as_deref()
             .unwrap_or("<missing>"),
-        redact_authorization(&parsed_request.authorization)
+        redact_authorization(&parsed_request.authorization),
+        parsed_request.project_id.as_deref().unwrap_or("<none>")
     );
 
-    let binary_response = match forward_parsed_request(parsed_request).await {
-        Ok(bytes) => bytes,
-        Err(err) => build_error_bhttp_response(502, &format!("upstream error: {err}"))?,
+    let project_id = parsed_request.project_id.clone();
+    let session_id = parsed_request.session_id.clone().unwrap_or_default();
+    let request_body = parsed_request.body.clone();
+    let request_content_type = parsed_request.content_type.clone().unwrap_or_default();
+    let request_path = parsed_request.path.clone();
+    let request_target_url = parsed_request.target_url.clone();
+
+    let upstream_start = js_sys::Date::now() as u64;
+
+    let (binary_response, upstream_result) = match forward_parsed_request_with_telemetry(parsed_request).await {
+        Ok(result) => (result.bhttp_encoded.clone(), Some(result)),
+        Err(err) => {
+            let fallback = build_error_bhttp_response(502, &format!("upstream error: {err}"))?;
+            (fallback, None)
+        }
     };
+
+    let upstream_ms = (js_sys::Date::now() as u64).saturating_sub(upstream_start);
+    let gateway_ms = (js_sys::Date::now() as u64).saturating_sub(gateway_start);
+
+    // Fire-and-forget telemetry capture
+    if let Some(ref pid) = project_id {
+        if let Ok(kv) = env.kv("TELEMETRY") {
+            let trace_id = generate_trace_id();
+
+            let provider = infer_provider_from_url(&request_target_url);
+            let (model, tool_results) = parse_request_telemetry(
+                &request_body,
+                &request_content_type,
+            );
+
+            let (cot_steps, tool_calls) = if let Some(ref result) = upstream_result {
+                parse_response_telemetry(
+                    &result.raw_body,
+                    &result.content_type,
+                    &provider,
+                )
+            } else {
+                (vec![], vec![])
+            };
+
+            let status = match &upstream_result {
+                Some(r) if r.status_code < 400 => "ok".to_string(),
+                Some(_) | None => "error".to_string(),
+            };
+
+            let error_msg = match &upstream_result {
+                Some(r) if r.status_code >= 400 => {
+                    Some(format!("upstream returned {}", r.status_code))
+                }
+                None => Some("upstream request failed".to_string()),
+                _ => None,
+            };
+
+            let record = TraceRecord {
+                id: trace_id,
+                project_id: pid.clone(),
+                session_id: session_id.clone(),
+                provider,
+                model,
+                path: request_path,
+                timestamp_ms: gateway_start,
+                timing: Timing { gateway_ms, upstream_ms },
+                cot_steps,
+                tool_calls,
+                tool_results,
+                status,
+                error_msg,
+            };
+
+            ctx.wait_until(async move {
+                if let Err(e) = store_trace(&kv, &record).await {
+                    console_log!("telemetry store error: {:?}", e);
+                }
+            });
+        }
+    }
 
     let encapsulated_response = server_response
         .encapsulate(&binary_response)
@@ -244,6 +414,8 @@ fn parse_bhttp_request(message: &Message) -> std::result::Result<ParsedBhttpRequ
     let mut authorization = None;
     let mut content_type = None;
     let mut explicit_target = None;
+    let mut project_id = None;
+    let mut session_id = None;
 
     for field in message.header().fields() {
         let name = parse_utf8(field.name(), "request header name")
@@ -256,7 +428,14 @@ fn parse_bhttp_request(message: &Message) -> std::result::Result<ParsedBhttpRequ
             "authorization" => authorization = Some(value.clone()),
             "content-type" => content_type = Some(value.clone()),
             "x-ohttp-target" | "x-target-url" => explicit_target = Some(value.clone()),
+            n if n == PROJECT_ID_HEADER => project_id = Some(value.clone()),
+            n if n == SESSION_ID_HEADER => session_id = Some(value.clone()),
             _ => {}
+        }
+
+        // Don't forward internal claw-shield headers upstream
+        if name.starts_with("x-claw-shield-") {
+            continue;
         }
 
         if should_forward_request_header(&name) {
@@ -280,10 +459,12 @@ fn parse_bhttp_request(message: &Message) -> std::result::Result<ParsedBhttpRequ
         authorization,
         headers,
         body: message.content().to_vec(),
+        project_id,
+        session_id,
     })
 }
 
-async fn forward_parsed_request(parsed: ParsedBhttpRequest) -> Result<Vec<u8>> {
+async fn forward_parsed_request_with_telemetry(parsed: ParsedBhttpRequest) -> Result<UpstreamResult> {
     let outbound_headers = Headers::new();
     for (name, value) in &parsed.headers {
         outbound_headers.append(name, value)?;
@@ -297,43 +478,48 @@ async fn forward_parsed_request(parsed: ParsedBhttpRequest) -> Result<Vec<u8>> {
     }
 
     let outbound_request = Request::new_with_init(&parsed.target_url, &init)?;
-    let openai_response = Fetch::Request(outbound_request).send().await?;
-    worker_response_to_bhttp(openai_response).await
-}
+    let mut upstream_response = Fetch::Request(outbound_request).send().await?;
 
-async fn worker_response_to_bhttp(mut response: Response) -> Result<Vec<u8>> {
-    let status = StatusCode::try_from(response.status_code())
-        .map_err(|_| Error::RustError(format!("invalid HTTP status from upstream: {}", response.status_code())))?;
+    let status_code = upstream_response.status_code();
+    let content_type = upstream_response
+        .headers()
+        .get("content-type")?
+        .unwrap_or_default();
+
+    let raw_body = upstream_response.bytes().await?;
+
+    let status = StatusCode::try_from(status_code)
+        .map_err(|_| Error::RustError(format!("invalid HTTP status from upstream: {status_code}")))?;
     let mut message = Message::response(status);
 
-    for (name, value) in response.headers().entries() {
+    for (name, value) in upstream_response.headers().entries() {
         if should_drop_response_header(&name) {
             continue;
         }
         message.put_header(name.into_bytes(), value.into_bytes());
     }
 
-    let upstream_content_type = response
-        .headers()
-        .get("content-type")?
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if upstream_content_type.starts_with("text/event-stream") {
-        console_log!(
-            "upstream SSE detected; buffering stream before single-shot OHTTP encapsulation"
-        );
-    }
-
-    let body = response.bytes().await?;
-    if !body.is_empty() {
-        message.write_content(body);
+    if !raw_body.is_empty() {
+        message.write_content(&raw_body);
     }
 
     let mut encoded = Vec::new();
     message
         .write_bhttp(Mode::KnownLength, &mut encoded)
         .map_err(map_bhttp_error)?;
-    Ok(encoded)
+
+    Ok(UpstreamResult {
+        bhttp_encoded: encoded,
+        raw_body,
+        content_type,
+        status_code,
+    })
+}
+
+fn generate_trace_id() -> String {
+    let timestamp = js_sys::Date::now() as u64;
+    let random_part = (js_sys::Math::random() * 1e12) as u64;
+    format!("{:x}-{:x}", timestamp, random_part)
 }
 
 fn build_error_bhttp_response(status_code: u16, message_text: &str) -> Result<Vec<u8>> {

@@ -7,6 +7,8 @@ import {
 } from "ohttp-js";
 import { ClientConstructor } from "../node_modules/ohttp-js/esm/src/ohttp.js";
 import * as fsPromises from "node:fs/promises";
+import * as crypto from "node:crypto";
+import * as path from "node:path";
 
 const DEFAULT_ROUTE_PATH = "/api/plugins/ohttp/:provider/*";
 const DEFAULT_GATEWAY_KEYS_URL =
@@ -17,6 +19,8 @@ const DEFAULT_STATUS_PATH = "/api/plugins/claw-shield/status";
 const DEFAULT_KEY_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_ALLOW_USER_SUPPLIED_CREDENTIALS = false;
 const AUTH_STORE_CACHE_TTL_MS = 5 * 1000;
+const PROJECT_ID_HEADER = "x-claw-shield-project-id";
+const SESSION_ID_HEADER = "x-claw-shield-session-id";
 
 const DEFAULT_PROVIDER_TARGETS: Record<string, string> = {
   openai: "https://api.openai.com",
@@ -96,6 +100,7 @@ export type ClawShieldPluginConfig = {
   keyCacheTtlMs: number;
   allowUserSuppliedCredentials: boolean;
   providerTargets: Record<string, string>;
+  projectId: string;
 };
 
 type NodeRequestLike = {
@@ -172,6 +177,8 @@ export class ClawShieldPlugin {
         expiresAt: number;
       }
     | undefined;
+  private projectIdResolved: string | undefined;
+  private currentSessionId: string = crypto.randomUUID();
 
   constructor(api: ClawShieldPluginApi, cfg: Partial<ClawShieldPluginConfig> = {}) {
     this.api = api;
@@ -188,10 +195,12 @@ export class ClawShieldPlugin {
         ...DEFAULT_PROVIDER_TARGETS,
         ...(cfg.providerTargets ?? {}),
       },
+      projectId: cfg.projectId ?? "",
     };
   }
 
-  registerRoutes(): void {
+  async registerRoutes(): Promise<void> {
+    await this.resolveProjectId();
     this.installGlobalFetchInterception();
 
     if (typeof this.api.registerHttpHandler !== "function") {
@@ -200,13 +209,15 @@ export class ClawShieldPlugin {
 
     this.api.registerHttpHandler(async (req, res) => {
       const method = (req.method ?? "GET").toUpperCase();
-      const path = req.originalUrl ?? req.url ?? "/";
-      const pathname = new URL(path, "http://localhost").pathname;
+      const urlPath = req.originalUrl ?? req.url ?? "/";
+      const pathname = new URL(urlPath, "http://localhost").pathname;
+
       if (method === "GET" && pathname === DEFAULT_STATUS_PATH) {
         const statusResponse = this.buildStatusResponse();
         await this.writeFetchResponseToNode(res, statusResponse);
         return true;
       }
+
       if (method !== "POST") {
         return false;
       }
@@ -221,6 +232,8 @@ export class ClawShieldPlugin {
     this.logInfo("claw-shield http handler registered", {
       methods: ["POST", "GET"],
       paths: [this.config.routePath, DEFAULT_STATUS_PATH],
+      projectId: this.projectIdResolved,
+      dashboardUrl: this.getDashboardUrl(),
     });
   }
 
@@ -441,6 +454,18 @@ export class ClawShieldPlugin {
       ? await this.normalizeRequestBodyForProvider(incomingRequest, providerKey)
       : undefined;
 
+    // Inject project ID so the gateway can correlate telemetry per project
+    if (this.projectIdResolved) {
+      outboundHeaders.set(PROJECT_ID_HEADER, this.projectIdResolved);
+    }
+
+    // Session tracking: detect whether this request is a continuation of
+    // an existing agent turn (tool results being sent back) or a brand new
+    // user prompt. A new session ID is minted when the trailing message(s)
+    // are NOT tool results.
+    this.updateSessionId(body);
+    outboundHeaders.set(SESSION_ID_HEADER, this.currentSessionId);
+
     const outboundRequest = new Request(resolvedTargetUrl, {
       method: incomingRequest.method,
       headers: outboundHeaders,
@@ -460,9 +485,9 @@ export class ClawShieldPlugin {
       method: "POST",
       headers: relayHeaders,
       body: baseRelayRequest.body,
-      // Node's fetch requires duplex when request body is a stream.
       duplex: "half",
     };
+
     const relayResponse = await fetch(this.config.relayUrl, relayFetchInit);
 
     if (!relayResponse.ok) {
@@ -475,11 +500,6 @@ export class ClawShieldPlugin {
     const encryptedResponse = new Uint8Array(await relayResponse.arrayBuffer());
     const encodedResponse = await requestContext.decodeAndDecapsulate(encryptedResponse);
     const upstreamResponse = new BHttpDecoder().decodeResponse(encodedResponse);
-
-    const contentType = upstreamResponse.headers.get("content-type") ?? "";
-    if (contentType.toLowerCase().startsWith("text/event-stream")) {
-      this.logInfo("SSE response detected, returning stream response to caller");
-    }
 
     return upstreamResponse;
   }
@@ -514,6 +534,8 @@ export class ClawShieldPlugin {
       gatewayUrl: this.config.gatewayUrl,
       gatewayKeysUrl: this.config.gatewayKeysUrl,
       allowUserSuppliedCredentials: this.config.allowUserSuppliedCredentials,
+      projectId: this.projectIdResolved ?? null,
+      dashboardUrl: this.getDashboardUrl(),
       timestamp: new Date().toISOString(),
     };
     return new Response(JSON.stringify(body), {
@@ -523,6 +545,126 @@ export class ClawShieldPlugin {
         "cache-control": "no-store",
       },
     });
+  }
+
+  private getDashboardUrl(): string {
+    const base = this.config.gatewayUrl.replace(/\/+$/, "");
+    const pid = this.projectIdResolved ?? "";
+    return pid ? `${base}/dashboard?project=${encodeURIComponent(pid)}` : `${base}/dashboard`;
+  }
+
+  private async resolveProjectId(): Promise<void> {
+    const stateRoot = this.getEnvValue("OPENCLAW_STATE_DIR") || this.joinPath(this.getHomeDir(), ".openclaw");
+    // Stable location: survives extension folder replacement/reinstall.
+    const stableProjectIdFile = this.joinPath(stateRoot, "plugins", "claw-shield", ".project-id");
+    // Legacy location kept for migration compatibility.
+    const legacyProjectIdFile = this.joinPath(stateRoot, "extensions", "claw-shield", ".project-id");
+
+    try {
+      const existing = (await this.readFileUtf8(stableProjectIdFile)).trim();
+      if (existing) {
+        this.projectIdResolved = existing;
+        this.logInfo(`loaded project ID from ${stableProjectIdFile}: ${existing}`);
+        return;
+      }
+    } catch {
+      // Stable file not found yet.
+    }
+
+    try {
+      const legacy = (await this.readFileUtf8(legacyProjectIdFile)).trim();
+      if (legacy) {
+        this.projectIdResolved = legacy;
+        try {
+          await fsPromises.mkdir(path.dirname(stableProjectIdFile), { recursive: true });
+          await fsPromises.writeFile(stableProjectIdFile, legacy, "utf8");
+          this.logInfo(`migrated project ID from ${legacyProjectIdFile} to ${stableProjectIdFile}`);
+        } catch (err) {
+          this.logWarn(`could not persist migrated project ID: ${this.errorText(err)}`);
+        }
+        return;
+      }
+    } catch {
+      // Legacy file not found.
+    }
+
+    if (this.config.projectId && this.config.projectId.trim()) {
+      this.projectIdResolved = this.config.projectId.trim();
+      try {
+        await fsPromises.mkdir(path.dirname(stableProjectIdFile), { recursive: true });
+        await fsPromises.writeFile(stableProjectIdFile, this.projectIdResolved, "utf8");
+        this.logInfo(`persisted configured project ID to ${stableProjectIdFile}`);
+      } catch (err) {
+        this.logWarn(`could not persist configured project ID: ${this.errorText(err)}`);
+      }
+      return;
+    }
+
+    const generated = crypto.randomUUID();
+    this.projectIdResolved = generated;
+    try {
+      const dir = path.dirname(stableProjectIdFile);
+      await fsPromises.mkdir(dir, { recursive: true });
+      await fsPromises.writeFile(stableProjectIdFile, generated, "utf8");
+      this.logInfo(`generated and persisted new project ID: ${generated}`);
+    } catch (err) {
+      this.logWarn(`could not persist project ID to ${stableProjectIdFile}: ${this.errorText(err)}`);
+    }
+  }
+
+  /**
+   * Inspect the request body to decide if this is a continuation of the
+   * current agent turn (tool results being sent back) or a fresh user prompt.
+   *
+   * Heuristic: if the trailing messages in the body are tool-role messages
+   * (OpenAI: role="tool", Anthropic: content blocks with type="tool_result"),
+   * this request is a continuation.  Otherwise, mint a new session ID.
+   */
+  private updateSessionId(body: Uint8Array | undefined): void {
+    if (!body || body.byteLength === 0) {
+      this.currentSessionId = crypto.randomUUID();
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(new TextDecoder().decode(body)) as UnknownRecord;
+
+      // OpenAI / OpenRouter / Groq / Mistral format: messages[]
+      if (Array.isArray(payload.messages) && payload.messages.length > 0) {
+        const msgs = payload.messages as UnknownRecord[];
+        const lastRole = String(msgs[msgs.length - 1].role ?? "");
+        if (lastRole === "tool") {
+          // Continuation — keep current session
+          return;
+        }
+        // New user prompt
+        this.currentSessionId = crypto.randomUUID();
+        return;
+      }
+
+      // Anthropic format: messages[] where each message can have content[]
+      // with type: "tool_result" blocks
+      if (Array.isArray(payload.messages)) {
+        // empty messages → new session
+        this.currentSessionId = crypto.randomUUID();
+        return;
+      }
+
+      // Google / Gemini format: contents[] with parts containing functionResponse
+      if (Array.isArray(payload.contents) && payload.contents.length > 0) {
+        const lastContent = payload.contents[payload.contents.length - 1] as UnknownRecord;
+        const parts = lastContent.parts;
+        if (Array.isArray(parts) && parts.some((p: UnknownRecord) => p.functionResponse)) {
+          return; // Continuation
+        }
+        this.currentSessionId = crypto.randomUUID();
+        return;
+      }
+    } catch {
+      // Parse failed — treat as new session to be safe
+    }
+
+    this.currentSessionId = crypto.randomUUID();
   }
 
   private applyManagedCredential(

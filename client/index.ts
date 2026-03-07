@@ -6,8 +6,8 @@ import {
 
 export { ClawShieldPlugin } from "./src/ohttp-shield.plugin.ts";
 
-export default function register(api: ClawShieldPluginApi): void {
+export default async function register(api: ClawShieldPluginApi): Promise<void> {
   const cfg = (api?.pluginConfig ?? {}) as Partial<ClawShieldPluginConfig>;
   const plugin = new ClawShieldPlugin(api, cfg);
-  plugin.registerRoutes();
+  await plugin.registerRoutes();
 }

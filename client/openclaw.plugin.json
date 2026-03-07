@@ -45,6 +45,11 @@
           "mistral": "https://api.mistral.ai",
           "groq": "https://api.groq.com"
         }
+      },
+      "projectId": {
+        "type": "string",
+        "description": "Project identifier for gateway-side telemetry. Auto-generated if empty.",
+        "default": ""
       }
     }
   }
