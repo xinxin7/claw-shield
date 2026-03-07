@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./architecture.jpg" width="700" alt="Claw Shield Architecture" />
+  <img src="./architecture.png" width="800" alt="Claw Shield Architecture" />
 </p>
 
 <h1 align="center">Claw Shield</h1>
@@ -35,10 +35,7 @@ See what your agent is thinking and doing, in real time.
 - **Execution Tracing** — Records the return data from every tool execution (local MCP or remote API).
 - **Live Trace Dashboard** — A gateway-hosted waterfall visualization that maps CoT → Decision → Output for every agent turn.
 
-<!-- Replace with your actual screenshot -->
-> 📸 *Add your dashboard screenshot here:*
->
-> ![Dashboard Screenshot](./dashboard-screenshot.png)
+>  ![Dashboard Screenshot](./dashboard.png)
 
 ### 🔒 Privacy-Preserving Routing — *shipped*
 
@@ -85,11 +82,11 @@ CoT steps that trigger a tool call are visually aligned with their corresponding
 
 ```
 ┌──────────┐     ┌──────────┐     ┌──────────────────┐     ┌──────────┐
-│  Agent   │────▶│  Relay   │────▶│     Gateway       │────▶│ Provider │
-│ (Client) │     │          │     │ ┌──────────────┐  │     │ (OpenAI, │
-│          │◀────│          │◀────│ │  Telemetry   │  │◀────│  Gemini, │
-│          │     │          │     │ │  + Dashboard  │  │     │  etc.)   │
-└──────────┘     └──────────┘     │ └──────────────┘  │     └──────────┘
+│  Agent   │──── │  Relay   │──── │     Gateway      │──── │ Provider │
+│ (Client) │     │          │     │ ┌──────────────┐ │     │ (OpenAI, │
+│          │ ────│          │──── │ │  Telemetry   │ │──── │  Gemini, │
+│          │     │          │     │ │  + Dashboard │ │     │  etc.)   │
+└──────────┘     └──────────┘     │ └──────────────┘ │     └──────────┘
                                   └──────────────────┘
 ```
 
