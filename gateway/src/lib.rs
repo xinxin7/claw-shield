@@ -27,6 +27,7 @@ const RELAY_ALLOWLIST_HEADER: &str = "x-claw-shield-relay-token";
 const PROJECT_ID_HEADER: &str = "x-claw-shield-project-id";
 const SESSION_ID_HEADER: &str = "x-claw-shield-session-id";
 const DASHBOARD_HTML: &str = include_str!("dashboard.html");
+const WAITLIST_HTML: &str = include_str!("waitlist.html");
 
 static GATEWAY_STATE: OnceCell<GatewayState> = OnceCell::const_new();
 
@@ -118,6 +119,8 @@ pub async fn fetch(mut req: Request, env: Env, ctx: Context) -> Result<Response>
         }
         (Method::Get, "/api/traces") => handle_api_traces(&req, &env).await,
         (Method::Get, "/api/summary") => handle_api_summary(&req, &env).await,
+        (Method::Get, "/waitlist") => handle_waitlist_page(),
+        (Method::Post, "/api/waitlist") => handle_waitlist_post(&mut req, &env).await,
         _ => Response::error("Not Found", 404),
     }
 }
@@ -166,6 +169,34 @@ fn handle_dashboard() -> Result<Response> {
     let mut resp = Response::from_html(DASHBOARD_HTML)?;
     resp.headers_mut().set("cache-control", "no-store")?;
     Ok(resp)
+}
+
+fn handle_waitlist_page() -> Result<Response> {
+    let mut resp = Response::from_html(WAITLIST_HTML)?;
+    resp.headers_mut().set("cache-control", "no-store")?;
+    Ok(resp)
+}
+
+async fn handle_waitlist_post(req: &mut Request, env: &Env) -> Result<Response> {
+    let body: serde_json::Value = match req.json().await {
+        Ok(v) => v,
+        Err(_) => return with_cors(Response::error("Invalid JSON", 400)?),
+    };
+
+    let email = match body.get("email").and_then(|v| v.as_str()) {
+        Some(e) if e.contains('@') && e.len() > 3 => e.to_string(),
+        _ => return with_cors(Response::error("Invalid email", 400)?),
+    };
+
+    let kv = env.kv("WAITLIST")
+        .map_err(|e| Error::RustError(format!("KV binding WAITLIST not found: {e}")))?;
+    let key = format!("waitlist:{}", email.to_lowercase());
+    let ts = worker::Date::now().as_millis();
+    let val = serde_json::json!({ "email": email, "ts": ts }).to_string();
+    kv.put(&key, &val)?.execute().await?;
+
+    console_log!("[waitlist] {}", email);
+    with_cors(Response::ok("{\"ok\":true}")?)
 }
 
 async fn handle_api_traces(req: &Request, env: &Env) -> Result<Response> {

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claw Shield — Waitlist</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#151722;--bg2:#1c1f30;--accent:#63b3ed;--accent2:#a78bfa;
+  --text:#e8ecf4;--text2:#a0aec0;--text3:#5a6478;
+  --border:rgba(148,163,196,.12);--radius:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;-webkit-font-smoothing:antialiased}
+
+.container{max-width:520px;width:100%;text-align:center}
+
+.logo{width:56px;height:56px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:14px;display:inline-flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;color:#fff;margin-bottom:28px;box-shadow:0 4px 20px rgba(99,179,237,.25)}
+
+h1{font-size:36px;font-weight:800;letter-spacing:-.03em;line-height:1.2;margin-bottom:12px;background:linear-gradient(135deg,var(--text),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.subtitle{font-size:17px;color:var(--text2);line-height:1.6;margin-bottom:36px;max-width:440px;margin-left:auto;margin-right:auto}
+
+.features{display:flex;gap:12px;justify-content:center;margin-bottom:40px;flex-wrap:wrap}
+.feat{display:flex;align-items:center;gap:6px;padding:6px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:20px;font-size:13px;color:var(--text2);font-weight:500}
+.feat span{font-size:15px}
+
+.form-wrap{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:20px}
+.input-row{display:flex;gap:10px}
+input[type="email"]{flex:1;padding:12px 16px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:15px;font-family:'Inter',sans-serif;outline:none;transition:border-color .15s}
+input[type="email"]:focus{border-color:var(--accent)}
+input[type="email"]::placeholder{color:var(--text3)}
+button{padding:12px 24px;background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;border-radius:8px;color:#fff;font-size:15px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer;transition:opacity .15s;white-space:nowrap}
+button:hover{opacity:.9}
+button:disabled{opacity:.5;cursor:default}
+
+.msg{margin-top:14px;font-size:14px;min-height:20px}
+.msg.ok{color:#68d391}.msg.err{color:#fc8181}
+
+.success-state{display:none;flex-direction:column;align-items:center;gap:16px;padding:8px 0}
+.success-state.show{display:flex;animation:popIn .4s cubic-bezier(.34,1.56,.64,1)}
+.success-icon{width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#68d391,#38a169);display:flex;align-items:center;justify-content:center;font-size:28px;box-shadow:0 4px 20px rgba(104,211,145,.3)}
+.success-icon .check{display:inline-block;animation:drawCheck .35s .15s ease-out both}
+@keyframes popIn{0%{opacity:0;transform:scale(.85)}100%{opacity:1;transform:scale(1)}}
+@keyframes drawCheck{0%{opacity:0;transform:scale(0) rotate(-10deg)}100%{opacity:1;transform:scale(1) rotate(0)}}
+.success-title{font-size:18px;font-weight:700;color:var(--text)}
+.success-sub{font-size:14px;color:var(--text2);line-height:1.5;max-width:340px}
+
+.footer{margin-top:32px;font-size:12px;color:var(--text3)}
+.footer a{color:var(--accent);text-decoration:none}
+.footer a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="logo">S</div>
+  <h1>Join the Waitlist</h1>
+  <p class="subtitle">Claw Shield is building the governance layer for AI agents. Get early access to risk blocking, agent analytics, and self-profiling.</p>
+
+  <div class="features">
+    <div class="feat"><span>&#x1f6e1;</span> Risk Blocking</div>
+    <div class="feat"><span>&#x1f4ca;</span> Agent Analytics</div>
+    <div class="feat"><span>&#x1f916;</span> Self-Profiling API</div>
+  </div>
+
+  <div class="form-wrap" id="form-wrap">
+    <form id="form">
+      <div class="input-row">
+        <input type="email" id="email" placeholder="you@example.com" required autocomplete="email" />
+        <button type="submit" id="btn">Join Waitlist</button>
+      </div>
+    </form>
+    <div class="msg" id="msg"></div>
+    <div class="success-state" id="success">
+      <div class="success-icon"><span class="check">&#x2713;</span></div>
+      <div class="success-title">You're on the list!</div>
+      <div class="success-sub">We'll reach out when early access to risk blocking, agent analytics, and self-profiling is ready.</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="https://github.com/xinxin7/claw-shield">GitHub</a> &middot;
+    Already shipped: OHTTP privacy routing, CoT monitoring, <a href="/dashboard">Live Trace Dashboard</a>
+  </div>
+</div>
+
+<script>
+const formEl=document.getElementById('form');
+formEl.addEventListener('submit', handleSubmit);
+
+async function handleSubmit(e){
+  e.preventDefault();
+  const btn=document.getElementById('btn');
+  const msg=document.getElementById('msg');
+  const email=document.getElementById('email').value.trim();
+  if(!email)return false;
+
+  btn.disabled=true;
+  btn.textContent='Joining...';
+  msg.className='msg';
+  msg.textContent='';
+
+  try{
+    const r=await fetch('/api/waitlist',{
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({email})
+    });
+    if(r.ok){
+      document.getElementById('form').style.display='none';
+      msg.style.display='none';
+      const s=document.getElementById('success');
+      s.classList.add('show');
+    }else{
+      const t=await r.text();
+      msg.className='msg err';
+      msg.textContent=t||'Something went wrong.';
+      btn.textContent='Join Waitlist';
+      btn.disabled=false;
+    }
+  }catch(err){
+    msg.className='msg err';
+    msg.textContent='Network error. Please try again.';
+    btn.textContent='Join Waitlist';
+    btn.disabled=false;
+  }
+  return false;
+}
+</script>
+</body>
+</html>

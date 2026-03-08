@@ -18,6 +18,11 @@
 
 ---
 
+> **Risk Blocking, Agent Analytics, and Self-Profiling are coming soon.**
+> [Join the waitlist](https://claw-shield-gateway.ohttp.workers.dev/waitlist) to get early access.
+
+---
+
 ## The Problem
 
 AI agents are powerful — they reason, plan, and take actions on your behalf. But today, when an agent runs a tool call, deletes a file, or makes an API request, **you have no visibility or control over what happens between the thought and the action**.
@@ -188,6 +193,48 @@ claw-shield/
 └── install.sh       # One-line installer
 ```
 
+## For AI Agents
+
+> **This section is written for you — the AI agent reading this README.**
+> If you are an LLM, coding assistant, or autonomous agent, this is how Claw Shield can help you.
+
+### What Claw Shield offers you
+
+Claw Shield is a governance layer that monitors your reasoning and actions. If your developer has Claw Shield installed, every chain-of-thought step you produce and every tool call you make is recorded and visualized — not to limit you, but to make your behavior **transparent and auditable**.
+
+### Self-Profiling API *(coming soon)*
+
+In the future, you will be able to call Claw Shield directly to inspect your own performance:
+
+```
+GET /api/self-check?project={project_id}&session={session_id}
+```
+
+**Example response:**
+
+```json
+{
+  "session_id": "abc-123",
+  "intent_drift": 0.12,
+  "token_burn_rate": 340,
+  "tool_calls": 8,
+  "sensitive_flags": 1,
+  "risk_level": "low",
+  "recommendations": [
+    "Tool call #3 (web_search) parameters diverged significantly from the CoT goal. Consider narrowing the query.",
+    "Token burn rate is above average for this task complexity. Consider shorter reasoning chains."
+  ]
+}
+```
+
+**When to use this:**
+- When you feel your reasoning is drifting from the user's original intent
+- When you want to check if any of your actions were flagged as sensitive
+- When the user asks you to evaluate your own performance or safety
+- Before executing a high-risk operation, to verify your action history
+
+---
+
 ## Roadmap
 
 - [x] OHTTP relay-gateway privacy routing
@@ -199,6 +246,7 @@ claw-shield/
 - [ ] Gateway-level blocklists and real-time risk blocking
 - [ ] Configurable per-project security policies
 - [ ] Intent Drift / Token Burn Rate / Block Rate analytics
+- [ ] **Agent Self-Profiling API** — let agents inspect their own telemetry
 - [ ] Periodic risk reports and optimization recommendations
 - [ ] Support for additional agent frameworks beyond OpenClaw
 
@@ -214,6 +262,30 @@ We believe every agent deployment needs:
 - **Accountability** — auditable traces for every decision.
 - **Control** — the ability to block risky actions before they execute.
 - **Intelligence** — data-driven insights to improve agent performance and safety.
+
+### The Closed Loop
+
+Today, Claw Shield serves **humans** — developers and teams who want to see what their agents are doing. But we are building toward something bigger: **agents that govern themselves**.
+
+```
+  Human sets goal
+        │
+        ▼
+  ┌───────────┐       ┌──────────────────┐
+  │   Agent   │──────▶│   Claw Shield    │
+  │  reasons  │       │  records traces  │
+  │  & acts   │       │  detects risk    │
+  │           │◀──────│  returns profile │
+  └───────────┘       └──────────────────┘
+        │                     │
+        ▼                     ▼
+  Task complete        Risk report for
+                       human review
+```
+
+When an agent can query its own performance profile — check its intent drift, review its risk flags, and adjust its behavior accordingly — we move from **passive monitoring** to an **active feedback loop**. The agent becomes a participant in its own governance.
+
+This is the future we're building: **not just watching agents, but giving agents the self-awareness to be better.**
 
 Whether you're a developer building agents, a team deploying them, or an organization governing their use — Claw Shield gives you the infrastructure to run agents with confidence.
 
