@@ -333,12 +333,7 @@ function buildFlowGroups(m){
       }
     }
     if(rowIdx===-1){
-      groups.push({
-        turn: tc._turn,
-        cot: null,
-        decision: null,
-        output: null,
-      });
+      groups.push({turn:tc._turn,cot:null,decision:null,output:null});
       rowIdx=groups.length-1;
     }
 
@@ -346,6 +341,14 @@ function buildFlowGroups(m){
     groups[rowIdx].decision=tc;
     groups[rowIdx].output=res;
   }
+
+  const representedTurns=new Set(groups.map(g=>g.turn));
+  for(let t=1;t<=m.count;t++){
+    if(!representedTurns.has(t)){
+      groups.push({turn:t,cot:null,decision:null,output:null,_emptyTurn:true});
+    }
+  }
+  groups.sort((a,b)=>a.turn-b.turn||(a.cot?.index||0)-(b.cot?.index||0));
 
   return groups;
 }
@@ -364,13 +367,20 @@ function renderWaterfall(m){
       const cotText=g.cot?esc(g.cot.content):'';
 
       // Left: CoT
-      let left=`<div class="cot-card"><div class="flow-meta">Turn ${g.turn}</div>${g.cot?`<span class="cot-preview">${cotText.slice(0,120)}${cotText.length>120?'...':''}</span><div class="cot-full">${cotText}</div>`:''}</div>`;
+      let left='';
+      if(g._emptyTurn){
+        left=`<div class="cot-card" style="opacity:.6;border-style:dashed"><div class="flow-meta">Turn ${g.turn}</div><span class="cot-preview" style="color:var(--text3)">Text-only response (no reasoning detected)</span></div>`;
+      } else {
+        left=`<div class="cot-card"><div class="flow-meta">Turn ${g.turn}</div>${g.cot?`<span class="cot-preview">${cotText.slice(0,120)}${cotText.length>120?'...':''}</span><div class="cot-full">${cotText}</div>`:''}</div>`;
+      }
 
-      // Middle: Decision (vertically centered via wf-cell-mid flexbox)
+      // Middle: Decision
       let mid='';
       if(g.decision){
         const cls=g.decision.is_sensitive?'sensitive':'';
         mid=`<div class="dec-node"><div class="dec-chip ${cls}"><span class="dec-arrow">&#x27a4;</span>${esc(g.decision.name)}</div>${g.decision.is_sensitive?'<div class="dec-sens">&#x1f6a8; '+esc(g.decision.sensitive_flags.join(', '))+'</div>':''}</div>`;
+      } else if(g._emptyTurn){
+        mid=`<div class="dec-node"><div class="dec-chip" style="opacity:.4;border-style:dashed;font-size:11px">&#x2014;</div></div>`;
       }
 
       // Right: Output

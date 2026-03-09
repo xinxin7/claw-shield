@@ -97,7 +97,7 @@ flowchart LR
         
         subgraph GW["Gateway (Sees what, not who)"]
             GatewayNode["Routing & Decryption"]
-            KV[("Telemetry KV")]
+            DB[("Telemetry D1")]
             Dashboard["Live Trace Dashboard"]
         end
     end
@@ -110,13 +110,13 @@ flowchart LR
     Relay == "2. Forwards Payload" ==> GatewayNode
     GatewayNode == "3. Decrypted API Call" ==> Provider
     Provider -. "4. API Response<br/>(SSE / JSON)" .-> GatewayNode
-    GatewayNode -. "5. Extracts CoT<br/>& Tools" .-> KV
-    KV -. "6. Serves Traces" .-> Dashboard
+    GatewayNode -. "5. Extracts CoT<br/>& Tools" .-> DB
+    DB -. "6. Serves Traces" .-> Dashboard
 ```
 
 1. **Client plugin** intercepts outbound model requests, wraps them in OHTTP, and injects a `project_id` + `session_id`.
 2. **Relay** (Cloudflare Worker) forwards encrypted traffic — it never sees the payload.
-3. **Gateway** (Cloudflare Worker, Rust/WASM) decrypts, extracts telemetry (CoT, tool calls, results), stores traces in KV, and forwards to the provider.
+3. **Gateway** (Cloudflare Worker, Rust/WASM) decrypts, extracts telemetry (CoT, tool calls, results), stores traces in D1, and forwards to the provider.
 4. **Dashboard** is served directly from the gateway — filter by project, drill into sessions, inspect the full reasoning-to-action trace.
 
 ## Providers
@@ -188,7 +188,7 @@ claw-shield/
 ├── gateway/         # Cloudflare Worker — OHTTP gateway (sees what, not who)
 │   └── src/
 │       ├── lib.rs           # Core OHTTP + routing logic
-│       ├── telemetry.rs     # CoT / tool call extraction + KV storage
+│       ├── telemetry.rs     # CoT / tool call extraction + D1 storage
 │       └── dashboard.html   # Live Trace Dashboard SPA
 └── install.sh       # One-line installer
 ```

@@ -206,9 +206,9 @@ async fn handle_api_traces(req: &Request, env: &Env) -> Result<Response> {
         _ => return with_cors(Response::error("Missing ?project= parameter", 400)?),
     };
 
-    let kv = env.kv("TELEMETRY")
-        .map_err(|e| Error::RustError(format!("KV binding TELEMETRY not found: {e}")))?;
-    let traces = list_traces(&kv, &project).await?;
+    let db = env.d1("TELEMETRY_DB")
+        .map_err(|e| Error::RustError(format!("D1 binding TELEMETRY_DB not found: {e}")))?;
+    let traces = list_traces(&db, &project).await?;
     let json = serde_json::to_string(&traces)
         .map_err(|e| Error::RustError(format!("json serialize: {e}")))?;
 
@@ -225,10 +225,9 @@ async fn handle_api_summary(req: &Request, env: &Env) -> Result<Response> {
         _ => return with_cors(Response::error("Missing ?project= parameter", 400)?),
     };
 
-    let kv = env.kv("TELEMETRY")
-        .map_err(|e| Error::RustError(format!("KV binding TELEMETRY not found: {e}")))?;
-    let traces = list_traces(&kv, &project).await?;
-    let summary = compute_summary(&traces);
+    let db = env.d1("TELEMETRY_DB")
+        .map_err(|e| Error::RustError(format!("D1 binding TELEMETRY_DB not found: {e}")))?;
+    let summary = compute_summary(&db, &project).await?;
     let json = serde_json::to_string(&summary)
         .map_err(|e| Error::RustError(format!("json serialize: {e}")))?;
 
@@ -325,7 +324,7 @@ async fn handle_ohttp_gateway(req: &mut Request, env: &Env, ctx: &Context) -> Re
     let session_id = parsed_request.session_id.clone().unwrap_or_default();
     let request_body = parsed_request.body.clone();
     let request_content_type = parsed_request.content_type.clone().unwrap_or_default();
-    let request_path = parsed_request.path.clone();
+    let request_path = redact_sensitive_query_params(&parsed_request.path);
     let request_target_url = parsed_request.target_url.clone();
 
     let upstream_start = js_sys::Date::now() as u64;
@@ -343,7 +342,7 @@ async fn handle_ohttp_gateway(req: &mut Request, env: &Env, ctx: &Context) -> Re
 
     // Fire-and-forget telemetry capture
     if let Some(ref pid) = project_id {
-        if let Ok(kv) = env.kv("TELEMETRY") {
+        if let Ok(db) = env.d1("TELEMETRY_DB") {
             let trace_id = generate_trace_id();
 
             let provider = infer_provider_from_url(&request_target_url);
@@ -392,7 +391,7 @@ async fn handle_ohttp_gateway(req: &mut Request, env: &Env, ctx: &Context) -> Re
             };
 
             ctx.wait_until(async move {
-                if let Err(e) = store_trace(&kv, &record).await {
+                if let Err(e) = store_trace(&db, &record).await {
                     console_log!("telemetry store error: {:?}", e);
                 }
             });

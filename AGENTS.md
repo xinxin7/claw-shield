@@ -30,9 +30,11 @@ Claw Shield is an AI agent governance infrastructure. It sits between agents and
 ### `gateway/` — Cloudflare Worker (Rust/WASM)
 
 - Entry: `gateway/src/lib.rs` — OHTTP decryption, request routing, telemetry orchestration
-- Telemetry: `gateway/src/telemetry.rs` — SSE parsing for OpenAI/Anthropic/Gemini, CoT extraction, tool call logging, KV storage
+- Telemetry: `gateway/src/telemetry.rs` — SSE parsing for OpenAI/Anthropic/Gemini, CoT extraction, tool call logging, D1 storage
 - Dashboard: `gateway/src/dashboard.html` — single-page app embedded via `include_str!()`, served at `/dashboard`
-- KV namespace `TELEMETRY` stores trace records keyed by `{project_id}:{trace_id}`
+- D1 database `TELEMETRY_DB` stores trace records in a `traces` table indexed by `(project_id, timestamp_ms)`
+- Migrations live in `gateway/migrations/` — apply with `npx wrangler d1 migrations apply claw-shield-telemetry`
+- KV namespace `WAITLIST` is used only for the waitlist feature (low-volume, read-heavy)
 - API endpoints: `GET /api/traces?project=X`, `GET /api/summary?project=X`
 - Built with `worker-build --release`, deployed via `wrangler deploy` from `gateway/`
 
@@ -40,10 +42,10 @@ Claw Shield is an AI agent governance infrastructure. It sits between agents and
 
 - **Language**: All code comments, UI text, and documentation are in English
 - **Dashboard styling**: CSS custom properties defined in `:root` of `dashboard.html`. Design is dark-mode with Inter + JetBrains Mono fonts
-- **Telemetry data model**: `TraceRecord` in `telemetry.rs` is the canonical schema — any new fields must be added there and to the `store_trace` / `list_traces` functions
+- **Telemetry data model**: `TraceRecord` in `telemetry.rs` is the canonical schema — any new fields must be added there, to the D1 migration, and to `store_trace` / `list_traces`
 - **Provider SSE parsing**: Each provider (OpenAI, Anthropic, Google) has its own `parse_*_sse` and `parse_*_json` function in `telemetry.rs`
 - **Sensitivity detection**: `detect_sensitivity()` in `telemetry.rs` flags dangerous tool names and content patterns
-- **No client-side telemetry storage**: All telemetry lives on the gateway KV. The client only injects identity headers
+- **No client-side telemetry storage**: All telemetry lives on the gateway D1 database. The client only injects identity headers
 
 ## How to Add a New Provider
 
@@ -63,11 +65,17 @@ Claw Shield is an AI agent governance infrastructure. It sits between agents and
 
 1. Add the route match in the `fetch` handler in `gateway/src/lib.rs` (follow the `/api/traces` pattern)
 2. Add CORS headers via `with_cors()`
-3. KV reads use `env.kv("TELEMETRY")`
+3. D1 queries use `env.d1("TELEMETRY_DB")`
 
 ## Build & Deploy
 
 ```bash
+# Gateway — first-time D1 setup
+cd gateway
+npx wrangler d1 create claw-shield-telemetry   # note the database_id in output
+# paste database_id into wrangler.toml → [[d1_databases]] → database_id
+npx wrangler d1 migrations apply claw-shield-telemetry
+
 # Gateway (Rust → WASM)
 cd gateway && npx wrangler deploy
 

@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use worker::kv::KvStore;
+use wasm_bindgen::JsValue;
+use worker::D1Database;
 
 const MAX_COT_CONTENT_LEN: usize = 8000;
 const MAX_ARGS_LEN: usize = 3000;
 const MAX_COT_STEPS: usize = 20;
-const TRACE_TTL_SECONDS: u64 = 7 * 24 * 3600;
+const TRACE_TTL_MS: u64 = 7 * 24 * 3600 * 1000;
 const MAX_TRACES_PER_LIST: usize = 100;
 
 // ── Data Types ──────────────────────────────────────────────────────────────
@@ -238,6 +239,9 @@ fn parse_openai_json(obj: &Value) -> (Vec<CotStep>, Vec<ToolCallRecord>) {
                 if let Some(r) = msg.get("reasoning_content").and_then(|v| v.as_str()) {
                     cot_buf.push_str(r);
                 }
+                if let Some(r) = msg.get("thinking").and_then(|v| v.as_str()) {
+                    cot_buf.push_str(r);
+                }
                 if let Some(tcs) = msg.get("tool_calls").and_then(|v| v.as_array()) {
                     for tc in tcs {
                         let call_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -283,10 +287,13 @@ fn parse_anthropic_sse(text: &str) -> (Vec<CotStep>, Vec<ToolCallRecord>) {
             "content_block_start" => {
                 let index = obj.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 if let Some(block) = obj.get("content_block") {
-                    if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                    let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if block_type == "tool_use" {
                         let id = block.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                         let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
                         tool_blocks.push((index, id, name, Vec::new()));
+                    } else if block_type == "redacted_thinking" {
+                        cot_buf.push_str("[redacted thinking]\n\n");
                     }
                 }
             }
@@ -332,6 +339,8 @@ fn parse_anthropic_json(obj: &Value) -> (Vec<CotStep>, Vec<ToolCallRecord>) {
                 if let Some(t) = block.get("thinking").and_then(|v| v.as_str()) {
                     cot_buf.push_str(t);
                 }
+            } else if block_type == "redacted_thinking" {
+                cot_buf.push_str("[redacted thinking]\n\n");
             } else if block_type == "tool_use" {
                 let id = block.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -505,79 +514,148 @@ fn split_cot_into_steps(raw: &str) -> Vec<CotStep> {
         .collect()
 }
 
-// ── KV Helpers ──────────────────────────────────────────────────────────────
+// ── D1 Storage ──────────────────────────────────────────────────────────────
 
-pub async fn store_trace(kv: &KvStore, record: &TraceRecord) -> Result<(), worker::Error> {
-    let key = format!("trace:{}:{}", record.project_id, record.timestamp_ms);
-    let json = serde_json::to_string(record)
-        .map_err(|e| worker::Error::RustError(format!("json serialize error: {e}")))?;
-    kv.put(&key, json)
-        .map_err(|e| worker::Error::RustError(format!("kv put error: {e}")))?
-        .expiration_ttl(TRACE_TTL_SECONDS)
-        .execute()
-        .await
-        .map_err(|e| worker::Error::RustError(format!("kv execute error: {e}")))?;
+#[derive(Deserialize)]
+struct TraceRow {
+    id: String,
+    project_id: String,
+    session_id: String,
+    provider: String,
+    model: String,
+    path: String,
+    timestamp_ms: f64,
+    gateway_ms: f64,
+    upstream_ms: f64,
+    status: String,
+    #[serde(default)]
+    error_msg: Option<String>,
+    cot_steps: String,
+    tool_calls: String,
+    tool_results: String,
+}
+
+#[derive(Deserialize)]
+struct SummaryRow {
+    total_requests: f64,
+    success_requests: f64,
+    error_requests: f64,
+    total_tool_calls: f64,
+    sensitive_tool_calls: f64,
+    total_cot_steps: f64,
+    avg_gateway_ms: f64,
+}
+
+pub async fn store_trace(db: &D1Database, record: &TraceRecord) -> Result<(), worker::Error> {
+    let cot_json = serde_json::to_string(&record.cot_steps).unwrap_or_else(|_| "[]".into());
+    let tools_json = serde_json::to_string(&record.tool_calls).unwrap_or_else(|_| "[]".into());
+    let results_json = serde_json::to_string(&record.tool_results).unwrap_or_else(|_| "[]".into());
+    let sensitive_count = record.tool_calls.iter().filter(|t| t.is_sensitive).count();
+
+    let error_val = match &record.error_msg {
+        Some(msg) => JsValue::from_str(msg),
+        None => JsValue::NULL,
+    };
+
+    db.prepare(
+        "INSERT INTO traces (id, project_id, session_id, provider, model, path, \
+         timestamp_ms, gateway_ms, upstream_ms, status, error_msg, \
+         cot_steps, tool_calls, tool_results, sensitive_tool_count) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
+    )
+    .bind(&[
+        JsValue::from_str(&record.id),
+        JsValue::from_str(&record.project_id),
+        JsValue::from_str(&record.session_id),
+        JsValue::from_str(&record.provider),
+        JsValue::from_str(&record.model),
+        JsValue::from_str(&record.path),
+        JsValue::from_f64(record.timestamp_ms as f64),
+        JsValue::from_f64(record.timing.gateway_ms as f64),
+        JsValue::from_f64(record.timing.upstream_ms as f64),
+        JsValue::from_str(&record.status),
+        error_val,
+        JsValue::from_str(&cot_json),
+        JsValue::from_str(&tools_json),
+        JsValue::from_str(&results_json),
+        JsValue::from_f64(sensitive_count as f64),
+    ])?
+    .run()
+    .await?;
+
     Ok(())
 }
 
-pub async fn list_traces(kv: &KvStore, project_id: &str) -> Result<Vec<TraceRecord>, worker::Error> {
-    let prefix = format!("trace:{project_id}:");
-    let list_result = kv.list()
-        .prefix(prefix)
-        .limit(MAX_TRACES_PER_LIST as u64)
-        .execute()
-        .await
-        .map_err(|e| worker::Error::RustError(format!("kv list error: {e}")))?;
+pub async fn list_traces(db: &D1Database, project_id: &str) -> Result<Vec<TraceRecord>, worker::Error> {
+    let cutoff_ms = (js_sys::Date::now() as u64).saturating_sub(TRACE_TTL_MS);
+    let _ = db.prepare("DELETE FROM traces WHERE timestamp_ms < ?1")
+        .bind(&[JsValue::from_f64(cutoff_ms as f64)])?
+        .run()
+        .await;
 
-    let mut records = Vec::new();
-    for key_entry in list_result.keys {
-        let key_name = key_entry.name;
-        if let Some(value) = kv.get(&key_name)
-            .text()
-            .await
-            .map_err(|e| worker::Error::RustError(format!("kv get error: {e}")))?
-        {
-            if let Ok(record) = serde_json::from_str::<TraceRecord>(&value) {
-                records.push(record);
-            }
-        }
-    }
+    let rows: Vec<TraceRow> = db.prepare(
+        "SELECT id, project_id, session_id, provider, model, path, \
+         timestamp_ms, gateway_ms, upstream_ms, status, error_msg, \
+         cot_steps, tool_calls, tool_results \
+         FROM traces WHERE project_id = ?1 \
+         ORDER BY timestamp_ms DESC LIMIT ?2"
+    )
+    .bind(&[
+        JsValue::from_str(project_id),
+        JsValue::from_f64(MAX_TRACES_PER_LIST as f64),
+    ])?
+    .all()
+    .await?
+    .results()?;
 
-    // Return newest first
-    records.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
-    Ok(records)
+    Ok(rows.into_iter().map(|r| TraceRecord {
+        id: r.id,
+        project_id: r.project_id,
+        session_id: r.session_id,
+        provider: r.provider,
+        model: r.model,
+        path: r.path,
+        timestamp_ms: r.timestamp_ms as u64,
+        timing: Timing {
+            gateway_ms: r.gateway_ms as u64,
+            upstream_ms: r.upstream_ms as u64,
+        },
+        cot_steps: serde_json::from_str(&r.cot_steps).unwrap_or_default(),
+        tool_calls: serde_json::from_str(&r.tool_calls).unwrap_or_default(),
+        tool_results: serde_json::from_str(&r.tool_results).unwrap_or_default(),
+        status: r.status,
+        error_msg: r.error_msg,
+    }).collect())
 }
 
-pub fn compute_summary(records: &[TraceRecord]) -> ProjectSummary {
-    let total = records.len() as u64;
-    let ok = records.iter().filter(|r| r.status == "ok").count() as u64;
-    let err = records.iter().filter(|r| r.status == "error").count() as u64;
-    let tool_calls: u64 = records.iter().map(|r| r.tool_calls.len() as u64).sum();
-    let sensitive: u64 = records.iter()
-        .flat_map(|r| r.tool_calls.iter())
-        .filter(|tc| tc.is_sensitive)
-        .count() as u64;
-    let cot_steps: u64 = records.iter().map(|r| r.cot_steps.len() as u64).sum();
+pub async fn compute_summary(db: &D1Database, project_id: &str) -> Result<ProjectSummary, worker::Error> {
+    let row = db.prepare(
+        "SELECT \
+            COUNT(*) as total_requests, \
+            COALESCE(SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END), 0) as success_requests, \
+            COALESCE(SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END), 0) as error_requests, \
+            COALESCE(SUM(json_array_length(tool_calls)), 0) as total_tool_calls, \
+            COALESCE(SUM(sensitive_tool_count), 0) as sensitive_tool_calls, \
+            COALESCE(SUM(json_array_length(cot_steps)), 0) as total_cot_steps, \
+            COALESCE(CAST(AVG(CASE WHEN status = 'ok' AND gateway_ms > 0 THEN gateway_ms END) AS INTEGER), 0) as avg_gateway_ms \
+         FROM traces WHERE project_id = ?1"
+    )
+    .bind(&[JsValue::from_str(project_id)])?
+    .first::<SummaryRow>(None)
+    .await?;
 
-    let gateway_ms_list: Vec<u64> = records.iter()
-        .filter(|r| r.status == "ok" && r.timing.gateway_ms > 0)
-        .map(|r| r.timing.gateway_ms)
-        .collect();
-    let avg_gateway = if gateway_ms_list.is_empty() {
-        0
-    } else {
-        gateway_ms_list.iter().sum::<u64>() / gateway_ms_list.len() as u64
-    };
-
-    ProjectSummary {
-        total_requests: total,
-        success_requests: ok,
-        error_requests: err,
-        total_tool_calls: tool_calls,
-        sensitive_tool_calls: sensitive,
-        total_cot_steps: cot_steps,
-        avg_gateway_ms: avg_gateway,
-    }
+    Ok(match row {
+        Some(r) => ProjectSummary {
+            total_requests: r.total_requests as u64,
+            success_requests: r.success_requests as u64,
+            error_requests: r.error_requests as u64,
+            total_tool_calls: r.total_tool_calls as u64,
+            sensitive_tool_calls: r.sensitive_tool_calls as u64,
+            total_cot_steps: r.total_cot_steps as u64,
+            avg_gateway_ms: r.avg_gateway_ms as u64,
+        },
+        None => ProjectSummary::default(),
+    })
 }
 
 // ── Provider Inference ──────────────────────────────────────────────────────
