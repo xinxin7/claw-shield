@@ -554,62 +554,100 @@ export class ClawShieldPlugin {
   }
 
   private async resolveProjectId(): Promise<void> {
-    const stateRoot = this.getEnvValue("OPENCLAW_STATE_DIR") || this.joinPath(this.getHomeDir(), ".openclaw");
-    // Stable location: survives extension folder replacement/reinstall.
-    const stableProjectIdFile = this.joinPath(stateRoot, "plugins", "claw-shield", ".project-id");
-    // Legacy location kept for migration compatibility.
-    const legacyProjectIdFile = this.joinPath(stateRoot, "extensions", "claw-shield", ".project-id");
+    const readPaths = this.projectIdReadPaths();
+    const writePaths = this.projectIdWritePaths();
 
-    try {
-      const existing = (await this.readFileUtf8(stableProjectIdFile)).trim();
-      if (existing) {
-        this.projectIdResolved = existing;
-        this.logInfo(`loaded project ID from ${stableProjectIdFile}: ${existing}`);
-        return;
-      }
-    } catch {
-      // Stable file not found yet.
-    }
-
-    try {
-      const legacy = (await this.readFileUtf8(legacyProjectIdFile)).trim();
-      if (legacy) {
-        this.projectIdResolved = legacy;
-        try {
-          await fsPromises.mkdir(path.dirname(stableProjectIdFile), { recursive: true });
-          await fsPromises.writeFile(stableProjectIdFile, legacy, "utf8");
-          this.logInfo(`migrated project ID from ${legacyProjectIdFile} to ${stableProjectIdFile}`);
-        } catch (err) {
-          this.logWarn(`could not persist migrated project ID: ${this.errorText(err)}`);
-        }
-        return;
-      }
-    } catch {
-      // Legacy file not found.
-    }
-
-    if (this.config.projectId && this.config.projectId.trim()) {
-      this.projectIdResolved = this.config.projectId.trim();
+    for (const filePath of readPaths) {
       try {
-        await fsPromises.mkdir(path.dirname(stableProjectIdFile), { recursive: true });
-        await fsPromises.writeFile(stableProjectIdFile, this.projectIdResolved, "utf8");
-        this.logInfo(`persisted configured project ID to ${stableProjectIdFile}`);
-      } catch (err) {
-        this.logWarn(`could not persist configured project ID: ${this.errorText(err)}`);
+        const existing = (await this.readFileUtf8(filePath)).trim();
+        if (existing) {
+          this.projectIdResolved = existing;
+          this.logInfo(`loaded project ID from ${filePath}: ${existing}`);
+          return;
+        }
+      } catch {
+        // not found at this path
       }
-      return;
     }
 
-    const generated = crypto.randomUUID();
-    this.projectIdResolved = generated;
-    try {
-      const dir = path.dirname(stableProjectIdFile);
-      await fsPromises.mkdir(dir, { recursive: true });
-      await fsPromises.writeFile(stableProjectIdFile, generated, "utf8");
-      this.logInfo(`generated and persisted new project ID: ${generated}`);
-    } catch (err) {
-      this.logWarn(`could not persist project ID to ${stableProjectIdFile}: ${this.errorText(err)}`);
+    this.projectIdResolved = this.config.projectId?.trim() || crypto.randomUUID();
+
+    let persisted = false;
+    for (const filePath of writePaths) {
+      try {
+        await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
+        await fsPromises.writeFile(filePath, this.projectIdResolved, "utf8");
+        this.logInfo(`persisted project ID to ${filePath}: ${this.projectIdResolved}`);
+        persisted = true;
+        break;
+      } catch (err) {
+        this.logWarn(`could not write project ID to ${filePath}: ${this.errorText(err)}`);
+      }
     }
+
+    if (!persisted) {
+      this.logError(
+        `CRITICAL: project ID could not be persisted — it will change on next restart. Tried: ${writePaths.join(", ")}`,
+        new Error("all candidate paths failed"),
+      );
+    }
+  }
+
+  private projectIdReadPaths(): string[] {
+    const paths: string[] = [];
+    const homeDir = this.getHomeDir();
+    const stateDir = this.getEnvValue("OPENCLAW_STATE_DIR");
+    const stateRoot = stateDir || (homeDir ? this.joinPath(homeDir, ".openclaw") : "");
+
+    if (stateRoot) {
+      paths.push(this.joinPath(stateRoot, "plugins", "claw-shield", ".project-id"));
+      paths.push(this.joinPath(stateRoot, "extensions", "claw-shield", ".project-id"));
+    }
+
+    const appData = this.getEnvValue("APPDATA");
+    if (appData) {
+      paths.push(this.joinPath(appData, "claw-shield", ".project-id"));
+    }
+
+    const localAppData = this.getEnvValue("LOCALAPPDATA");
+    if (localAppData) {
+      paths.push(this.joinPath(localAppData, "claw-shield", ".project-id"));
+    }
+
+    if (homeDir && !appData) {
+      const xdg = this.getEnvValue("XDG_CONFIG_HOME") || this.joinPath(homeDir, ".config");
+      paths.push(this.joinPath(xdg, "claw-shield", ".project-id"));
+    }
+
+    return paths;
+  }
+
+  private projectIdWritePaths(): string[] {
+    const paths: string[] = [];
+    const homeDir = this.getHomeDir();
+    const stateDir = this.getEnvValue("OPENCLAW_STATE_DIR");
+    const stateRoot = stateDir || (homeDir ? this.joinPath(homeDir, ".openclaw") : "");
+
+    if (stateRoot) {
+      paths.push(this.joinPath(stateRoot, "plugins", "claw-shield", ".project-id"));
+    }
+
+    const appData = this.getEnvValue("APPDATA");
+    if (appData) {
+      paths.push(this.joinPath(appData, "claw-shield", ".project-id"));
+    }
+
+    const localAppData = this.getEnvValue("LOCALAPPDATA");
+    if (localAppData) {
+      paths.push(this.joinPath(localAppData, "claw-shield", ".project-id"));
+    }
+
+    if (homeDir && !appData) {
+      const xdg = this.getEnvValue("XDG_CONFIG_HOME") || this.joinPath(homeDir, ".config");
+      paths.push(this.joinPath(xdg, "claw-shield", ".project-id"));
+    }
+
+    return paths;
   }
 
   /**
