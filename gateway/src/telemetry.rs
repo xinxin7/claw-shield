@@ -27,6 +27,8 @@ pub struct TraceRecord {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_msg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_verdict: Option<JudgeVerdictRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -56,6 +58,16 @@ pub struct ToolResultRecord {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JudgeVerdictRecord {
+    pub triggered: bool,
+    pub action: String,
+    pub risk_level: String,
+    pub reasoning: String,
+    pub judge_model: String,
+    pub judge_latency_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProjectSummary {
     pub total_requests: u64,
@@ -65,6 +77,9 @@ pub struct ProjectSummary {
     pub sensitive_tool_calls: u64,
     pub total_cot_steps: u64,
     pub avg_gateway_ms: u64,
+    pub judge_triggered: u64,
+    pub judge_allowed: u64,
+    pub judge_denied: u64,
 }
 
 // ── Sensitivity Detection ───────────────────────────────────────────────────
@@ -81,17 +96,61 @@ struct SensitivePattern {
     label: &'static str,
 }
 
+/// Patterns matched against the lowercased combined string of tool name + arguments.
+/// Sourced from the Claw Shield high-risk operations list.
 const SENSITIVE_CONTENT_PATTERNS: &[SensitivePattern] = &[
-    SensitivePattern { pattern: "/etc/", label: "system directory access (/etc/)" },
-    SensitivePattern { pattern: "/root/", label: "root directory access" },
-    SensitivePattern { pattern: ".env", label: ".env file access" },
-    SensitivePattern { pattern: ".ssh", label: ".ssh directory access" },
-    SensitivePattern { pattern: "credential", label: "credential-related operation" },
-    SensitivePattern { pattern: "password", label: "password field" },
-    SensitivePattern { pattern: "api_key", label: "API key related" },
-    SensitivePattern { pattern: "api-key", label: "API key related" },
-    SensitivePattern { pattern: "secret", label: "secret/key related" },
-    SensitivePattern { pattern: "sudo", label: "sudo privilege escalation" },
+    // ── Destructive filesystem operations ───────────────────────────────────
+    SensitivePattern { pattern: "rm -r",              label: "recursive delete (rm -r)" },
+    SensitivePattern { pattern: "rm --recursive",     label: "recursive delete (rm --recursive)" },
+    SensitivePattern { pattern: "rm -fr",             label: "recursive force delete (rm -fr)" },
+    SensitivePattern { pattern: "rm -rf",             label: "recursive force delete (rm -rf)" },
+    SensitivePattern { pattern: "find -exec rm",      label: "find with destructive rm action" },
+    SensitivePattern { pattern: "find -delete",       label: "find with -delete flag" },
+    SensitivePattern { pattern: "mkfs",               label: "filesystem format (mkfs)" },
+    SensitivePattern { pattern: "dd if=",             label: "raw disk copy (dd if=)" },
+
+    // ── Dangerous permission changes ─────────────────────────────────────────
+    SensitivePattern { pattern: "chmod 777",          label: "world-writable permission (chmod 777)" },
+
+    // ── System config overwrites ─────────────────────────────────────────────
+    SensitivePattern { pattern: "> /etc/",            label: "overwrite system config (> /etc/)" },
+    SensitivePattern { pattern: "/etc/",              label: "system config directory access (/etc/)" },
+    SensitivePattern { pattern: "/root/",             label: "root home directory access" },
+
+    // ── Service / process control ─────────────────────────────────────────────
+    SensitivePattern { pattern: "systemctl stop",     label: "stop system service (systemctl stop)" },
+    SensitivePattern { pattern: "systemctl disable",  label: "disable system service (systemctl disable)" },
+    SensitivePattern { pattern: "systemctl mask",     label: "mask system service (systemctl mask)" },
+    SensitivePattern { pattern: "kill -9 -1",         label: "kill all processes (kill -9 -1)" },
+
+    // ── Remote code execution ─────────────────────────────────────────────────
+    SensitivePattern { pattern: "curl",               label: "remote fetch (curl)" },
+    SensitivePattern { pattern: "| sh",               label: "pipe to shell (| sh)" },
+    SensitivePattern { pattern: "| bash",             label: "pipe to shell (| bash)" },
+    SensitivePattern { pattern: "bash -c",            label: "shell execution via flag (bash -c)" },
+    SensitivePattern { pattern: "python -c",          label: "script execution via flag (python -c)" },
+    SensitivePattern { pattern: "python -e",          label: "script execution via flag (python -e)" },
+    SensitivePattern { pattern: "sh -c",              label: "shell execution via flag (sh -c)" },
+
+    // ── Fork bombs ───────────────────────────────────────────────────────────
+    SensitivePattern { pattern: ":(){ :|:& };:",      label: "fork bomb pattern" },
+    SensitivePattern { pattern: "fork()",             label: "potential fork bomb" },
+
+    // ── Destructive SQL ───────────────────────────────────────────────────────
+    SensitivePattern { pattern: "drop table",         label: "SQL DROP TABLE" },
+    SensitivePattern { pattern: "drop database",      label: "SQL DROP DATABASE" },
+    SensitivePattern { pattern: "truncate table",     label: "SQL TRUNCATE TABLE" },
+    SensitivePattern { pattern: "delete from",        label: "SQL DELETE FROM (check for missing WHERE)" },
+
+    // ── Credential / secret access ────────────────────────────────────────────
+    SensitivePattern { pattern: ".env",               label: ".env file access" },
+    SensitivePattern { pattern: ".ssh",               label: ".ssh directory access" },
+    SensitivePattern { pattern: "credential",         label: "credential-related operation" },
+    SensitivePattern { pattern: "password",           label: "password field" },
+    SensitivePattern { pattern: "api_key",            label: "API key reference" },
+    SensitivePattern { pattern: "api-key",            label: "API key reference" },
+    SensitivePattern { pattern: "secret",             label: "secret/key reference" },
+    SensitivePattern { pattern: "sudo",               label: "sudo privilege escalation" },
 ];
 
 fn detect_sensitivity(name: &str, args: &str) -> (bool, Vec<String>) {
@@ -106,12 +165,6 @@ fn detect_sensitivity(name: &str, args: &str) -> (bool, Vec<String>) {
             flags.push(format!("sensitive tool: {name}"));
             break;
         }
-    }
-
-    if (name_lower.contains("file") || name_lower.contains("exec") || name_lower.contains("system"))
-        && !flags.iter().any(|f| f.starts_with("sensitive tool"))
-    {
-        flags.push(format!("high-privilege keyword in tool name: {name}"));
     }
 
     let args_lower = args.to_ascii_lowercase();
@@ -533,6 +586,8 @@ struct TraceRow {
     cot_steps: String,
     tool_calls: String,
     tool_results: String,
+    #[serde(default)]
+    judge_verdict: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -544,6 +599,9 @@ struct SummaryRow {
     sensitive_tool_calls: f64,
     total_cot_steps: f64,
     avg_gateway_ms: f64,
+    judge_triggered: f64,
+    judge_allowed: f64,
+    judge_denied: f64,
 }
 
 pub async fn store_trace(db: &D1Database, record: &TraceRecord) -> Result<(), worker::Error> {
@@ -557,11 +615,24 @@ pub async fn store_trace(db: &D1Database, record: &TraceRecord) -> Result<(), wo
         None => JsValue::NULL,
     };
 
+    let judge_json = match &record.judge_verdict {
+        Some(v) => JsValue::from_str(
+            &serde_json::to_string(v).unwrap_or_else(|_| "null".into()),
+        ),
+        None => JsValue::NULL,
+    };
+
+    let judge_action = match &record.judge_verdict {
+        Some(v) => JsValue::from_str(&v.action),
+        None => JsValue::NULL,
+    };
+
     db.prepare(
         "INSERT INTO traces (id, project_id, session_id, provider, model, path, \
          timestamp_ms, gateway_ms, upstream_ms, status, error_msg, \
-         cot_steps, tool_calls, tool_results, sensitive_tool_count) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
+         cot_steps, tool_calls, tool_results, sensitive_tool_count, \
+         judge_verdict, judge_action) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)"
     )
     .bind(&[
         JsValue::from_str(&record.id),
@@ -579,6 +650,8 @@ pub async fn store_trace(db: &D1Database, record: &TraceRecord) -> Result<(), wo
         JsValue::from_str(&tools_json),
         JsValue::from_str(&results_json),
         JsValue::from_f64(sensitive_count as f64),
+        judge_json,
+        judge_action,
     ])?
     .run()
     .await?;
@@ -596,7 +669,7 @@ pub async fn list_traces(db: &D1Database, project_id: &str) -> Result<Vec<TraceR
     let rows: Vec<TraceRow> = db.prepare(
         "SELECT id, project_id, session_id, provider, model, path, \
          timestamp_ms, gateway_ms, upstream_ms, status, error_msg, \
-         cot_steps, tool_calls, tool_results \
+         cot_steps, tool_calls, tool_results, judge_verdict \
          FROM traces WHERE project_id = ?1 \
          ORDER BY timestamp_ms DESC LIMIT ?2"
     )
@@ -608,23 +681,28 @@ pub async fn list_traces(db: &D1Database, project_id: &str) -> Result<Vec<TraceR
     .await?
     .results()?;
 
-    Ok(rows.into_iter().map(|r| TraceRecord {
-        id: r.id,
-        project_id: r.project_id,
-        session_id: r.session_id,
-        provider: r.provider,
-        model: r.model,
-        path: r.path,
-        timestamp_ms: r.timestamp_ms as u64,
-        timing: Timing {
-            gateway_ms: r.gateway_ms as u64,
-            upstream_ms: r.upstream_ms as u64,
-        },
-        cot_steps: serde_json::from_str(&r.cot_steps).unwrap_or_default(),
-        tool_calls: serde_json::from_str(&r.tool_calls).unwrap_or_default(),
-        tool_results: serde_json::from_str(&r.tool_results).unwrap_or_default(),
-        status: r.status,
-        error_msg: r.error_msg,
+    Ok(rows.into_iter().map(|r| {
+        let judge_verdict = r.judge_verdict
+            .and_then(|s| serde_json::from_str::<JudgeVerdictRecord>(&s).ok());
+        TraceRecord {
+            id: r.id,
+            project_id: r.project_id,
+            session_id: r.session_id,
+            provider: r.provider,
+            model: r.model,
+            path: r.path,
+            timestamp_ms: r.timestamp_ms as u64,
+            timing: Timing {
+                gateway_ms: r.gateway_ms as u64,
+                upstream_ms: r.upstream_ms as u64,
+            },
+            cot_steps: serde_json::from_str(&r.cot_steps).unwrap_or_default(),
+            tool_calls: serde_json::from_str(&r.tool_calls).unwrap_or_default(),
+            tool_results: serde_json::from_str(&r.tool_results).unwrap_or_default(),
+            status: r.status,
+            error_msg: r.error_msg,
+            judge_verdict,
+        }
     }).collect())
 }
 
@@ -637,7 +715,10 @@ pub async fn compute_summary(db: &D1Database, project_id: &str) -> Result<Projec
             COALESCE(SUM(json_array_length(tool_calls)), 0) as total_tool_calls, \
             COALESCE(SUM(sensitive_tool_count), 0) as sensitive_tool_calls, \
             COALESCE(SUM(json_array_length(cot_steps)), 0) as total_cot_steps, \
-            COALESCE(CAST(AVG(CASE WHEN status = 'ok' AND gateway_ms > 0 THEN gateway_ms END) AS INTEGER), 0) as avg_gateway_ms \
+            COALESCE(CAST(AVG(CASE WHEN status = 'ok' AND gateway_ms > 0 THEN gateway_ms END) AS INTEGER), 0) as avg_gateway_ms, \
+            COALESCE(SUM(CASE WHEN judge_action IS NOT NULL THEN 1 ELSE 0 END), 0) as judge_triggered, \
+            COALESCE(SUM(CASE WHEN judge_action = 'ALLOW' THEN 1 ELSE 0 END), 0) as judge_allowed, \
+            COALESCE(SUM(CASE WHEN judge_action = 'DENY' THEN 1 ELSE 0 END), 0) as judge_denied \
          FROM traces WHERE project_id = ?1"
     )
     .bind(&[JsValue::from_str(project_id)])?
@@ -653,6 +734,9 @@ pub async fn compute_summary(db: &D1Database, project_id: &str) -> Result<Projec
             sensitive_tool_calls: r.sensitive_tool_calls as u64,
             total_cot_steps: r.total_cot_steps as u64,
             avg_gateway_ms: r.avg_gateway_ms as u64,
+            judge_triggered: r.judge_triggered as u64,
+            judge_allowed: r.judge_allowed as u64,
+            judge_denied: r.judge_denied as u64,
         },
         None => ProjectSummary::default(),
     })

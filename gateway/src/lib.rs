@@ -1,3 +1,4 @@
+mod judge;
 mod telemetry;
 
 use std::io::Cursor;
@@ -13,8 +14,9 @@ use ohttp::{
 use tokio::sync::OnceCell;
 use worker::*;
 
+use crate::judge::JudgeAction;
 use crate::telemetry::{
-    TraceRecord, Timing,
+    TraceRecord, Timing, JudgeVerdictRecord,
     parse_response_telemetry, parse_request_telemetry,
     infer_provider_from_url, store_trace, list_traces, compute_summary,
 };
@@ -326,10 +328,12 @@ async fn handle_ohttp_gateway(req: &mut Request, env: &Env, ctx: &Context) -> Re
     let request_content_type = parsed_request.content_type.clone().unwrap_or_default();
     let request_path = redact_sensitive_query_params(&parsed_request.path);
     let request_target_url = parsed_request.target_url.clone();
+    let request_authorization = parsed_request.authorization.clone();
+    let request_headers = parsed_request.headers.clone();
 
     let upstream_start = js_sys::Date::now() as u64;
 
-    let (binary_response, upstream_result) = match forward_parsed_request_with_telemetry(parsed_request).await {
+    let (mut binary_response, upstream_result) = match forward_parsed_request_with_telemetry(parsed_request).await {
         Ok(result) => (result.bhttp_encoded.clone(), Some(result)),
         Err(err) => {
             let fallback = build_error_bhttp_response(502, &format!("upstream error: {err}"))?;
@@ -338,28 +342,84 @@ async fn handle_ohttp_gateway(req: &mut Request, env: &Env, ctx: &Context) -> Re
     };
 
     let upstream_ms = (js_sys::Date::now() as u64).saturating_sub(upstream_start);
+
+    // Parse telemetry from upstream response
+    let provider = infer_provider_from_url(&request_target_url);
+    let (model, tool_results) = parse_request_telemetry(&request_body, &request_content_type);
+
+    let (cot_steps, tool_calls) = if let Some(ref result) = upstream_result {
+        parse_response_telemetry(&result.raw_body, &result.content_type, &provider)
+    } else {
+        (vec![], vec![])
+    };
+
+    // ── Judge Invocation ────────────────────────────────────────────────────
+    let mut judge_verdict_record: Option<JudgeVerdictRecord> = None;
+
+    let upstream_ok = upstream_result.as_ref().map_or(false, |r| r.status_code < 400);
+    if upstream_ok && judge::should_invoke_judge(&tool_calls) {
+        let judge_start = js_sys::Date::now() as u64;
+        console_log!(
+            "[judge] sensitive tool calls detected, invoking judge for session={}",
+            &session_id
+        );
+
+        match judge::invoke_judge(
+            &provider,
+            &request_authorization,
+            &request_headers,
+            &request_body,
+            &cot_steps,
+            &tool_calls,
+        )
+        .await
+        {
+            Ok((verdict, judge_model)) => {
+                let judge_ms = (js_sys::Date::now() as u64).saturating_sub(judge_start);
+                console_log!(
+                    "[judge] verdict={:?} risk={} model={} latency={}ms",
+                    verdict.action,
+                    verdict.risk_level,
+                    judge_model,
+                    judge_ms
+                );
+
+                if verdict.action == JudgeAction::Deny {
+                    let content_type = upstream_result
+                        .as_ref()
+                        .map(|r| r.content_type.as_str())
+                        .unwrap_or("application/json");
+                    let intervention_body =
+                        judge::build_intervention_response(&provider, &verdict, &tool_calls);
+                    binary_response =
+                        build_json_bhttp_response(200, content_type, &intervention_body)?;
+                }
+
+                judge_verdict_record = Some(JudgeVerdictRecord {
+                    triggered: true,
+                    action: match verdict.action {
+                        JudgeAction::Allow => "ALLOW".into(),
+                        JudgeAction::Deny => "DENY".into(),
+                    },
+                    risk_level: verdict.risk_level,
+                    reasoning: verdict.reasoning,
+                    judge_model,
+                    judge_latency_ms: judge_ms,
+                });
+            }
+            Err(e) => {
+                let judge_ms = (js_sys::Date::now() as u64).saturating_sub(judge_start);
+                console_log!("[judge] invocation failed (fail-open): {:?} ({}ms)", e, judge_ms);
+            }
+        }
+    }
+
     let gateway_ms = (js_sys::Date::now() as u64).saturating_sub(gateway_start);
 
     // Fire-and-forget telemetry capture
     if let Some(ref pid) = project_id {
         if let Ok(db) = env.d1("TELEMETRY_DB") {
             let trace_id = generate_trace_id();
-
-            let provider = infer_provider_from_url(&request_target_url);
-            let (model, tool_results) = parse_request_telemetry(
-                &request_body,
-                &request_content_type,
-            );
-
-            let (cot_steps, tool_calls) = if let Some(ref result) = upstream_result {
-                parse_response_telemetry(
-                    &result.raw_body,
-                    &result.content_type,
-                    &provider,
-                )
-            } else {
-                (vec![], vec![])
-            };
 
             let status = match &upstream_result {
                 Some(r) if r.status_code < 400 => "ok".to_string(),
@@ -388,6 +448,7 @@ async fn handle_ohttp_gateway(req: &mut Request, env: &Env, ctx: &Context) -> Re
                 tool_results,
                 status,
                 error_msg,
+                judge_verdict: judge_verdict_record,
             };
 
             ctx.wait_until(async move {
@@ -550,6 +611,24 @@ fn generate_trace_id() -> String {
     let timestamp = js_sys::Date::now() as u64;
     let random_part = (js_sys::Math::random() * 1e12) as u64;
     format!("{:x}-{:x}", timestamp, random_part)
+}
+
+fn build_json_bhttp_response(status_code: u16, content_type: &str, body: &[u8]) -> Result<Vec<u8>> {
+    let status = StatusCode::try_from(status_code)
+        .map_err(|_| Error::RustError(format!("invalid status code: {status_code}")))?;
+
+    let mut message = Message::response(status);
+    let ct = if content_type.is_empty() { "application/json" } else { content_type };
+    message.put_header("content-type", ct);
+    if !body.is_empty() {
+        message.write_content(body);
+    }
+
+    let mut encoded = Vec::new();
+    message
+        .write_bhttp(Mode::KnownLength, &mut encoded)
+        .map_err(map_bhttp_error)?;
+    Ok(encoded)
 }
 
 fn build_error_bhttp_response(status_code: u16, message_text: &str) -> Result<Vec<u8>> {

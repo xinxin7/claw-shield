@@ -18,7 +18,7 @@
 
 ---
 
-> **Risk Blocking, Agent Analytics, and Self-Profiling are coming soon.**
+> **Agent Analytics and Self-Profiling are coming soon.**
 > [Join the waitlist](https://claw-shield-gateway.ohttp.workers.dev/waitlist) to get early access.
 
 ---
@@ -30,6 +30,17 @@ AI agents are powerful — they reason, plan, and take actions on your behalf. B
 Claw Shield sits between your agent and the outside world. It captures every chain-of-thought step, every tool call decision, and every execution result — giving you a real-time, auditable trace of everything your agent does.
 
 ## What Claw Shield Does
+
+### 🛡️ Model-as-a-Judge — *shipped*
+
+When an agent proposes a high-risk action, Claw Shield automatically invokes a second "Judge" model to audit the decision before it executes.
+
+- **Trigger**: Tool calls are scanned against a comprehensive list of dangerous patterns (`rm -rf`, `DROP TABLE`, `curl | sh`, `chmod 777`, credential access, etc.).
+- **Audit**: The Judge receives the user's intent, the agent's chain-of-thought reasoning, and the proposed action — then decides whether the logic is sound.
+- **Allow**: If the reasoning forms a complete chain from user request to proposed action, the operation passes through silently.
+- **Deny**: If the Judge detects logic gaps, hallucinated intent, or prompt injection, it blocks the action and injects an intervention message into the response.
+- **Zero config**: The Judge reuses the same API key and provider — no extra credentials needed.
+- **Full telemetry**: Every Judge invocation is recorded — trigger count, allow/deny decisions, reasoning, risk level, model used, and latency — all visible in the dashboard and `/api/summary`.
 
 ### 🔍 Agent Monitoring — *shipped*
 
@@ -49,14 +60,6 @@ All traffic flows through an [OHTTP](https://www.rfc-editor.org/rfc/rfc9458.html
 - **Relay** sees who you are, but not what you send.
 - **Gateway** sees what you send, but not who you are.
 - Providers see relayed traffic — no direct fingerprint tied to your identity or tooling.
-
-### 🛡️ Risk Blocking — *coming soon*
-
-Gateway-level blocklists for high-risk operations:
-
-- Define rules for dangerous tool calls (e.g., `rm -rf`, credential access, arbitrary code execution).
-- Block or alert in real-time before the action reaches the downstream API.
-- Configurable per-project policies.
 
 ### 📊 Agent Analytics — *coming soon*
 
@@ -97,6 +100,7 @@ flowchart LR
         
         subgraph GW["Gateway (Sees what, not who)"]
             GatewayNode["Routing & Decryption"]
+            Judge["Judge Model<br/>(Model-as-a-Judge)"]
             DB[("Telemetry D1")]
             Dashboard["Live Trace Dashboard"]
         end
@@ -110,14 +114,17 @@ flowchart LR
     Relay == "2. Forwards Payload" ==> GatewayNode
     GatewayNode == "3. Decrypted API Call" ==> Provider
     Provider -. "4. API Response<br/>(SSE / JSON)" .-> GatewayNode
-    GatewayNode -. "5. Extracts CoT<br/>& Tools" .-> DB
-    DB -. "6. Serves Traces" .-> Dashboard
+    GatewayNode -. "5. Sensitive?" .-> Judge
+    Judge -. "Allow / Deny" .-> GatewayNode
+    GatewayNode -. "6. Stores Trace<br/>+ Judge Verdict" .-> DB
+    DB -. "7. Serves Traces" .-> Dashboard
 ```
 
 1. **Client plugin** intercepts outbound model requests, wraps them in OHTTP, and injects a `project_id` + `session_id`.
 2. **Relay** (Cloudflare Worker) forwards encrypted traffic — it never sees the payload.
-3. **Gateway** (Cloudflare Worker, Rust/WASM) decrypts, extracts telemetry (CoT, tool calls, results), stores traces in D1, and forwards to the provider.
-4. **Dashboard** is served directly from the gateway — filter by project, drill into sessions, inspect the full reasoning-to-action trace.
+3. **Gateway** (Cloudflare Worker, Rust/WASM) decrypts, extracts telemetry (CoT, tool calls, results), and forwards to the provider.
+4. **Judge** — if the response contains sensitive tool calls, the gateway invokes a second model to audit the action. If denied, the response is replaced with an intervention message.
+5. **Dashboard** is served directly from the gateway — filter by project, drill into sessions, inspect the full reasoning-to-action trace with Judge verdicts.
 
 ## Providers
 
@@ -186,9 +193,13 @@ claw-shield/
 ├── relay/           # Cloudflare Worker — OHTTP relay (sees who, not what)
 │   └── index.js
 ├── gateway/         # Cloudflare Worker — OHTTP gateway (sees what, not who)
+│   ├── migrations/          # D1 schema migrations
 │   └── src/
-│       ├── lib.rs           # Core OHTTP + routing logic
+│       ├── lib.rs           # Core OHTTP + routing + Judge integration
 │       ├── telemetry.rs     # CoT / tool call extraction + D1 storage
+│       ├── judge.rs         # Model-as-a-Judge — audit logic + provider API calls
+│       ├── skills/          # Judge audit skills (Markdown, compiled in via include_str!)
+│       │   └── judge_audit.md
 │       └── dashboard.html   # Live Trace Dashboard SPA
 └── install.sh       # One-line installer
 ```
@@ -243,7 +254,9 @@ GET /api/self-check?project={project_id}&session={session_id}
 - [x] Gateway-hosted Live Trace Dashboard
 - [x] Session grouping (multi-request agent turns)
 - [x] Sensitivity detection for dangerous tool calls
-- [ ] Gateway-level blocklists and real-time risk blocking
+- [x] **Model-as-a-Judge** — automated audit of high-risk actions via a second model
+- [x] Judge audit skills system (`gateway/src/skills/`) — version-controlled evaluation criteria
+- [x] Judge telemetry — trigger/allow/deny counts, reasoning, risk level in dashboard
 - [ ] Configurable per-project security policies
 - [ ] Intent Drift / Token Burn Rate / Block Rate analytics
 - [ ] **Agent Self-Profiling API** — let agents inspect their own telemetry
@@ -265,7 +278,7 @@ We believe every agent deployment needs:
 
 ### The Closed Loop
 
-Today, Claw Shield serves **humans** — developers and teams who want to see what their agents are doing. But we are building toward something bigger: **agents that govern themselves**.
+Today, Claw Shield already **actively governs** agent behavior through the Model-as-a-Judge system — a second model audits high-risk actions in real time, blocking those that don't logically follow from the user's intent. But we're building toward something even bigger: **agents that govern themselves**.
 
 ```
   Human sets goal
@@ -274,16 +287,16 @@ Today, Claw Shield serves **humans** — developers and teams who want to see wh
   ┌───────────┐       ┌──────────────────┐
   │   Agent   │──────▶│   Claw Shield    │
   │  reasons  │       │  records traces  │
-  │  & acts   │       │  detects risk    │
-  │           │◀──────│  returns profile │
+  │  & acts   │       │  Judge audits    │
+  │           │◀──────│  allow / deny    │
   └───────────┘       └──────────────────┘
         │                     │
         ▼                     ▼
-  Task complete        Risk report for
-                       human review
+  Task complete        Audit trail for
+  (or blocked)         human review
 ```
 
-When an agent can query its own performance profile — check its intent drift, review its risk flags, and adjust its behavior accordingly — we move from **passive monitoring** to an **active feedback loop**. The agent becomes a participant in its own governance.
+When an agent can query its own performance profile — check its intent drift, review its risk flags, and adjust its behavior accordingly — we move from **reactive governance** to a **proactive feedback loop**. The agent becomes a participant in its own governance.
 
 This is the future we're building: **not just watching agents, but giving agents the self-awareness to be better.**
 

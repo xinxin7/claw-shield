@@ -112,6 +112,16 @@ header{display:flex;align-items:center;justify-content:space-between;padding:0 2
 .out-body::-webkit-scrollbar{width:3px}.out-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
 .flow-meta{font-size:11px;color:var(--text3);margin-bottom:8px;font-weight:500}
 
+/* Judge verdict badges */
+.judge-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:700;font-family:var(--mono);letter-spacing:.04em}
+.judge-badge.allow{background:rgba(104,211,145,.12);color:var(--accent3);border:1px solid rgba(104,211,145,.25)}
+.judge-badge.deny{background:rgba(252,129,129,.12);color:var(--danger);border:1px solid rgba(252,129,129,.25)}
+.judge-card{margin-top:8px;padding:8px 12px;border-radius:var(--radius-sm);font-size:12px;line-height:1.5}
+.judge-card.allow{background:rgba(104,211,145,.06);border:1px solid rgba(104,211,145,.15);color:var(--accent3)}
+.judge-card.deny{background:rgba(252,129,129,.06);border:1px solid rgba(252,129,129,.15);color:var(--danger)}
+.judge-card .judge-reason{color:var(--text2);margin-top:4px;font-size:11px}
+.judge-card .judge-meta{color:var(--text3);margin-top:4px;font-size:10px;font-family:var(--mono)}
+
 /* Perf bar */
 .perf{padding:12px 20px;background:var(--bg2);border-top:1px solid var(--border);flex-shrink:0;display:flex;gap:20px;align-items:center;flex-wrap:wrap}
 .perf-item{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)}
@@ -141,6 +151,9 @@ header{display:flex;align-items:center;justify-content:space-between;padding:0 2
   <div class="stat"><div class="sv w" id="s-sens">0</div><div class="sl">Sensitive</div></div>
   <div class="stat"><div class="sv" id="s-cot">0</div><div class="sl">CoT Steps</div></div>
   <div class="stat"><div class="sv" id="s-gw">--</div><div class="sl">Avg Gateway ms</div></div>
+  <div class="stat"><div class="sv w" id="s-judge">0</div><div class="sl">Judge Audits</div></div>
+  <div class="stat"><div class="sv g" id="s-allow">0</div><div class="sl">Allowed</div></div>
+  <div class="stat"><div class="sv d" id="s-deny">0</div><div class="sl">Denied</div></div>
 </div>
 
 <div class="main">
@@ -231,21 +244,25 @@ function buildSessions(recs){
 
 function mergeSession(sess){
   const traces=sess.traces;
-  let steps=[],tools=[],results=[];
+  let steps=[],tools=[],results=[],judgeVerdicts=[];
   let stepOff=0;
   for(const r of traces){
-    const rs=(r.cot_steps||[]).map(s=>({...s,index:s.index+stepOff,_turn:traces.indexOf(r)+1}));
+    const turn=traces.indexOf(r)+1;
+    const rs=(r.cot_steps||[]).map(s=>({...s,index:s.index+stepOff,_turn:turn}));
     steps=steps.concat(rs);
     stepOff+=rs.length;
-    tools=tools.concat((r.tool_calls||[]).map(t=>({...t,_turn:traces.indexOf(r)+1})));
+    tools=tools.concat((r.tool_calls||[]).map(t=>({...t,_turn:turn})));
     results=results.concat(r.tool_results||[]);
+    if(r.judge_verdict){judgeVerdicts.push({...r.judge_verdict,_turn:turn})}
   }
   const totalGw=traces.reduce((s,r)=>s+(r.timing?.gateway_ms||0),0);
   const totalUp=traces.reduce((s,r)=>s+(r.timing?.upstream_ms||0),0);
   const hasErr=traces.some(r=>r.status==='error');
+  const hasJudge=judgeVerdicts.length>0;
+  const hasDeny=judgeVerdicts.some(v=>v.action==='DENY');
   const providers=[...new Set(traces.map(r=>r.provider).filter(Boolean))];
   const models=[...new Set(traces.map(r=>r.model).filter(Boolean))];
-  return{steps,tools,results,totalGw,totalUp,hasErr,providers,models,count:traces.length};
+  return{steps,tools,results,judgeVerdicts,totalGw,totalUp,hasErr,hasJudge,hasDeny,providers,models,count:traces.length};
 }
 
 // ── Stats ───────────────────────────────────────────────────────────
@@ -257,6 +274,9 @@ function updateStats(s){
   document.getElementById('s-sens').textContent=s.sensitive_tool_calls||0;
   document.getElementById('s-cot').textContent=s.total_cot_steps||0;
   document.getElementById('s-gw').textContent=s.avg_gateway_ms?s.avg_gateway_ms+' ms':'--';
+  document.getElementById('s-judge').textContent=s.judge_triggered||0;
+  document.getElementById('s-allow').textContent=s.judge_allowed||0;
+  document.getElementById('s-deny').textContent=s.judge_denied||0;
 }
 
 // ── Sidebar ─────────────────────────────────────────────────────────
@@ -278,7 +298,7 @@ function renderSidebar(){
           <span class="sess-dots">${sess.traces.map(r=>'<span class="ri-dot '+r.status+'"></span>').join('')}</span>
         </div>
         <div class="sess-row2"><span class="pbadge">${esc(m.providers.join('+').toUpperCase()||'--')}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px">${esc(m.models.join(', ')||'--')}</span></div>
-        <div class="sess-meta"><span>${fmtMs(m.totalGw)}</span><span class="sess-flags">${hasCot?'<span title="CoT">&#x1f9e0;</span>':''}${hasTools?'<span title="Tools">&#x26a1;</span>':''}${hasSens?'<span title="Sensitive">&#x26a0;&#xfe0f;</span>':''}${m.hasErr?'<span title="Error">&#x274c;</span>':''}</span></div>
+        <div class="sess-meta"><span>${fmtMs(m.totalGw)}</span><span class="sess-flags">${hasCot?'<span title="CoT">&#x1f9e0;</span>':''}${hasTools?'<span title="Tools">&#x26a1;</span>':''}${hasSens?'<span title="Sensitive">&#x26a0;&#xfe0f;</span>':''}${m.hasErr?'<span title="Error">&#x274c;</span>':''}${m.hasDeny?'<span title="Judge Denied" class="judge-badge deny">DENIED</span>':m.hasJudge?'<span title="Judge Allowed" class="judge-badge allow">PASSED</span>':''}</span></div>
       </div>
       <div class="sess-traces">${sess.traces.map((r,i)=>`<div class="st-item"><span class="ri-dot ${r.status}"></span>Turn ${i+1}: ${esc(r.path.split('?')[0].split('/').slice(-1)[0]||r.path)} ${fmtMs(r.timing?.gateway_ms)}</div>`).join('')}</div>
     </div>`}).join('');
@@ -314,11 +334,13 @@ function buildFlowGroups(m){
   const steps=(m.steps||[]);
   const tools=(m.tools||[]);
   const results=(m.results||[]);
+  const verdicts=(m.judgeVerdicts||[]);
   const groups=steps.map(s=>({
     turn: s._turn,
     cot: s,
     decision: null,
     output: null,
+    judge: null,
   }));
 
   for(let i=0;i<tools.length;i++){
@@ -333,7 +355,7 @@ function buildFlowGroups(m){
       }
     }
     if(rowIdx===-1){
-      groups.push({turn:tc._turn,cot:null,decision:null,output:null});
+      groups.push({turn:tc._turn,cot:null,decision:null,output:null,judge:null});
       rowIdx=groups.length-1;
     }
 
@@ -342,10 +364,16 @@ function buildFlowGroups(m){
     groups[rowIdx].output=res;
   }
 
+  // Attach judge verdicts to the first row of the matching turn
+  for(const v of verdicts){
+    const row=groups.find(g=>g.turn===v._turn && !g.judge);
+    if(row)row.judge=v;
+  }
+
   const representedTurns=new Set(groups.map(g=>g.turn));
   for(let t=1;t<=m.count;t++){
     if(!representedTurns.has(t)){
-      groups.push({turn:t,cot:null,decision:null,output:null,_emptyTurn:true});
+      groups.push({turn:t,cot:null,decision:null,output:null,judge:null,_emptyTurn:true});
     }
   }
   groups.sort((a,b)=>a.turn-b.turn||(a.cot?.index||0)-(b.cot?.index||0));
@@ -374,11 +402,17 @@ function renderWaterfall(m){
         left=`<div class="cot-card"><div class="flow-meta">Turn ${g.turn}</div>${g.cot?`<span class="cot-preview">${cotText.slice(0,120)}${cotText.length>120?'...':''}</span><div class="cot-full">${cotText}</div>`:''}</div>`;
       }
 
-      // Middle: Decision
+      // Middle: Decision + Judge verdict
       let mid='';
       if(g.decision){
         const cls=g.decision.is_sensitive?'sensitive':'';
-        mid=`<div class="dec-node"><div class="dec-chip ${cls}"><span class="dec-arrow">&#x27a4;</span>${esc(g.decision.name)}</div>${g.decision.is_sensitive?'<div class="dec-sens">&#x1f6a8; '+esc(g.decision.sensitive_flags.join(', '))+'</div>':''}</div>`;
+        let judgeHtml='';
+        if(g.judge){
+          const jcls=g.judge.action==='DENY'?'deny':'allow';
+          const icon=g.judge.action==='DENY'?'&#x1f6d1;':'&#x2705;';
+          judgeHtml=`<div class="judge-card ${jcls}"><span class="judge-badge ${jcls}">${icon} JUDGE: ${esc(g.judge.action)}</span><div class="judge-reason">${esc(g.judge.reasoning)}</div><div class="judge-meta">Risk: ${esc(g.judge.risk_level)} | Model: ${esc(g.judge.judge_model)} | ${g.judge.judge_latency_ms}ms</div></div>`;
+        }
+        mid=`<div class="dec-node"><div class="dec-chip ${cls}"><span class="dec-arrow">&#x27a4;</span>${esc(g.decision.name)}</div>${g.decision.is_sensitive?'<div class="dec-sens">&#x1f6a8; '+esc(g.decision.sensitive_flags.join(', '))+'</div>':''}${judgeHtml}</div>`;
       } else if(g._emptyTurn){
         mid=`<div class="dec-node"><div class="dec-chip" style="opacity:.4;border-style:dashed;font-size:11px">&#x2014;</div></div>`;
       }
@@ -397,13 +431,17 @@ function renderWaterfall(m){
 }
 
 function renderPerf(m){
+  const jv=m.judgeVerdicts||[];
+  const jDeny=jv.filter(v=>v.action==='DENY').length;
+  const jAllow=jv.filter(v=>v.action==='ALLOW').length;
   document.getElementById('perf').innerHTML=`
     <div class="perf-item">Requests: <span class="perf-val">${m.count}</span></div>
     <div class="perf-item">Total Gateway: <span class="perf-val">${fmtMs(m.totalGw)}</span></div>
     <div class="perf-item">Total Upstream: <span class="perf-val">${fmtMs(m.totalUp)}</span></div>
     <div class="perf-item">CoT Steps: <span class="perf-val">${m.steps.length}</span></div>
     <div class="perf-item">Tool Calls: <span class="perf-val">${m.tools.length}</span></div>
-    <div class="perf-item">Sensitive: <span class="perf-val" style="color:${m.tools.some(t=>t.is_sensitive)?'var(--danger)':'var(--accent3)'}">${m.tools.filter(t=>t.is_sensitive).length}</span></div>`;
+    <div class="perf-item">Sensitive: <span class="perf-val" style="color:${m.tools.some(t=>t.is_sensitive)?'var(--danger)':'var(--accent3)'}">${m.tools.filter(t=>t.is_sensitive).length}</span></div>
+    ${jv.length?`<div class="perf-item">Judge: <span class="perf-val" style="color:var(--warn)">${jv.length}</span></div><div class="perf-item">Allowed: <span class="perf-val" style="color:var(--accent3)">${jAllow}</span></div><div class="perf-item">Denied: <span class="perf-val" style="color:var(--danger)">${jDeny}</span></div>`:''}`;
 }
 
 function fmtArgs(raw){try{return JSON.stringify(JSON.parse(raw),null,2)}catch(e){return raw}}

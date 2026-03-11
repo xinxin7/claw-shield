@@ -27,6 +27,7 @@ database_name = "claw-shield-telemetry"
 database_id = "88a3d00a-cd51-4343-bc05-961a57ed6e1c"
 migrations_dir = "migrations"
 
-# In production, inject secrets with wrangler secret.
-# wrangler secret put OHTTP_PRIVATE_KEY_SEED_B64
-# wrangler secret put RELAY_SHARED_TOKEN
+[observability]
+[observability.logs]
+enabled = true
+invocation_logs = true
